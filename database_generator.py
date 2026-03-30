@@ -9,7 +9,7 @@ import string
 def generate_dictionary(size: int) -> list:
     """
     Generate a password dictionary of the given size containing:
-    - Common passwords (hard-coded)
+    - Common passwords 
     - Numeric patterns (0000-9999)
     - Random lowercase strings
     """
@@ -44,17 +44,6 @@ def generate_dictionary(size: int) -> list:
 
 
 def generate_users(num_users: int, dictionary: list, reuse_probability: float = 0.7) -> dict:
-    """
-    Generate a user database where passwords are chosen from the dictionary.
-
-    Args:
-        num_users: Number of users to generate.
-        dictionary: List of possible passwords.
-        reuse_probability: Probability that a user picks from the top popular passwords.
-
-    Returns:
-        {username: plaintext_password}
-    """
     # Define a "popular" subset (top 20% of dictionary)
     popular_count = max(1, len(dictionary) // 5)
     popular_passwords = dictionary[:popular_count]
@@ -69,3 +58,12 @@ def generate_users(num_users: int, dictionary: list, reuse_probability: float = 
         users[username] = password
 
     return users
+
+
+'''
+reuse_probability = 0.7
+
+Then:
+70% of users choose from popular passwords
+30% choose from entire dictionary
+'''

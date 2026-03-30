@@ -7,14 +7,6 @@ from sha256_manual import sha256
 
 
 def build_rainbow_table(dictionary: list) -> tuple:
-    """
-    Precompute hashes for every word in the dictionary.
-
-    Returns:
-        (rainbow_table, precompute_time)
-        rainbow_table: {hash: password}
-        precompute_time: seconds taken
-    """
     start = time.perf_counter()
 
     rainbow_table = {}
@@ -25,18 +17,27 @@ def build_rainbow_table(dictionary: list) -> tuple:
     precompute_time = time.perf_counter() - start
     return rainbow_table, precompute_time
 
+'''{
+  hash("password"): "password",
+  hash("123456"): "123456",
+  hash("qwerty"): "qwerty"
+}
+
+
+hashed_db = {
+  "user_0000": "5e884898...",
+  "user_0001": "8d969eef..."
+}
+
+
+creack_db = {
+  "user_0000": "password",
+  "user_0001": "123456"
+}
+'''
 
 def crack_database(hashed_db: dict, rainbow_table: dict) -> tuple:
-    """
-    Look up each hashed password in the rainbow table.
-
-    Returns:
-        (cracked, lookup_time)
-        cracked: {username: recovered_password}
-        lookup_time: seconds taken for the lookup phase
-    """
     start = time.perf_counter()
-
     cracked = {}
     for username, h in hashed_db.items():
         if h in rainbow_table:

@@ -1,8 +1,3 @@
-"""
-Manual SHA-256 implementation (no hashlib).
-Supports parameterized round count (32 or 64).
-"""
-
 NUM_ROUNDS = 64
 
 # First 32 bits of the fractional parts of the square roots of the first 8 primes

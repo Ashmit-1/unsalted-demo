@@ -7,17 +7,6 @@ from sha256_manual import sha256
 
 
 def hash_database(users_dict: dict) -> tuple:
-    """
-    Hash all passwords without salt.
-
-    Args:
-        users_dict: {username: plaintext_password}
-
-    Returns:
-        (hashed_db, hash_frequency_map)
-        hashed_db: {username: hash}
-        hash_frequency_map: {hash: count} showing identical hash clustering
-    """
     hashed_db = {}
     all_hashes = []
 
@@ -29,3 +18,18 @@ def hash_database(users_dict: dict) -> tuple:
     hash_frequency_map = dict(Counter(all_hashes))
 
     return hashed_db, hash_frequency_map
+
+
+'''
+(
+    {
+        "user_0001": "HASH_A",
+        "user_0002": "HASH_B",
+        "user_0003": "HASH_A"
+    },
+    {
+        "HASH_A": 2,
+        "HASH_B": 1
+    }
+)
+'''
