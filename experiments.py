@@ -5,8 +5,8 @@ Automated 25 test runs with randomized parameters.
 import random
 
 from database_generator import generate_dictionary, generate_users
-from unsalted_system import hash_database
-from attacker_unsalted import build_rainbow_table, crack_database
+from hash_systems import hash_database
+from attackers import build_rainbow_table, crack_database
 from metrics import calculate_success_rate, log_results_to_dict
 
 

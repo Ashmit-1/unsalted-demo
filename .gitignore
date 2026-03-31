@@ -1,9 +1,5 @@
-__pycache__
-results.csv
-plan.md
-README.md
+__pycache__/
+*.csv
 .venv/
 graphs/
-review/
-
-
+docs/

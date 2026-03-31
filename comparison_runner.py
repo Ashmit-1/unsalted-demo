@@ -1,50 +1,49 @@
 """
-Comparative experiment runner.
+Four-way comparative experiment runner.
 
-Runs identical test scenarios against BOTH the unsalted (vulnerable) system
-and the salted (secure) system, then returns side-by-side results for
-graphing and analysis.
+Systems compared:
+  0. Unsalted SHA-256          — W = |D| × T_h
+  1. Salted SHA-256            — W = N × |D| × T_h
+  2. Key-Stretched (K=1000)   — W = N × |D| × K × T_h
+  3. Salt + Pepper (256-bit)  — W = 2²⁵⁶ × N × |D| × T_h
 """
 
 import random
-import time
-
 from database_generator import generate_dictionary, generate_users
-from unsalted_system import hash_database
-from attacker_unsalted import build_rainbow_table, crack_database
-from salted_system import hash_database_salted
-from attacker_salted import attempt_rainbow_on_salted, estimate_salted_work
+from hash_systems import hash_database, hash_database_salted
+from attackers import build_rainbow_table, crack_database, attempt_rainbow_on_salted
+from preventions import (
+    hash_database_stretched, attempt_rainbow_on_stretched, ITERATIONS,
+    hash_database_peppered, attempt_rainbow_on_peppered, get_server_pepper,
+)
 from metrics import calculate_success_rate
 
 
-def run_comparison(
-    num_tests: int = 25,
-    dict_base_size: int = 2000,
-    callback=None,
+def run_full_comparison(
+    num_tests=25,
+    dict_base_size=2000,
+    k_iter=ITERATIONS,
+    log_cb=None,
+    progress_cb=None,
     stop_event=None,
 ) -> dict:
-    """
-    Run num_tests paired experiments.
 
-    For each test:
-      - Same users & dictionary used for BOTH systems
-      - Unsalted: build rainbow table → lookup  (fast, high success)
-      - Salted:   reuse rainbow table → lookup  (fails, 0% success)
+    def log(msg, tag=""):
+        if log_cb:
+            log_cb(msg, tag)
 
-    Args:
-        callback: fn(test_id, n_users, dict_sz, unsalted_sr, salted_sr, u_time)
-        stop_event: threading.Event — checked between tests to allow cancellation
-
-    Returns:
-        {
-          "unsalted": [...],
-          "salted":   [...],
-          "summary":  {...},
-        }
-    """
     full_dictionary = generate_dictionary(dict_base_size)
-    unsalted_results = []
-    salted_results   = []
+    results = {"unsalted": [], "salted": [], "stretched": [], "peppered": []}
+    pepper = get_server_pepper()
+
+    log("", "")
+    log("  W O R K   F O R M U L A S", "head")
+    log("  " + "─" * 50, "dim")
+    log("  Unsalted  :  W = |D| × T_h", "math")
+    log("  Salted    :  W = N × |D| × T_h", "math")
+    log(f"  Stretched :  W = N × |D| × K × T_h   K={k_iter:,}", "math")
+    log("  Peppered  :  W = 2²⁵⁶ × N × |D| × T_h  ≈ ∞", "math")
+    log("", "")
 
     for i in range(num_tests):
         if stop_event and stop_event.is_set():
@@ -54,93 +53,115 @@ def run_comparison(
         reuse_prob = round(random.uniform(0.5, 0.9), 2)
         dict_size  = random.randint(len(full_dictionary) // 2, len(full_dictionary))
         dictionary = random.sample(full_dictionary, dict_size)
+        users      = generate_users(num_users, dictionary, reuse_prob)
 
-        users = generate_users(num_users, dictionary, reuse_prob)
+        log(f"  ╔═ TEST {i+1:02d}  N={num_users}  |D|={dict_size:,}  reuse={reuse_prob:.0%} {'═'*20}", "head")
 
-        # ── Unsalted attack ──────────────────────────────────────────────────
-        hashed_db, hash_freq = hash_database(users)
-        rainbow_table, precompute_time = build_rainbow_table(dictionary)
-        cracked_u, lookup_time = crack_database(hashed_db, rainbow_table)
+        # Shared rainbow table
+        rt, pre_t = build_rainbow_table(dictionary)
+        T_h = pre_t / dict_size
 
-        u_success = calculate_success_rate(len(cracked_u), num_users)
-        u_time    = precompute_time + lookup_time
+        log(f"  ║  T_h = {pre_t:.6f}s ÷ {dict_size:,} = {T_h:.8f} s/hash", "math")
 
-        # Per-hash timing for math validation
-        hash_time = precompute_time / dict_size if dict_size else 0
+        # ── Unsalted ──────────────────────────────────────────────────
+        hdb, freq = hash_database(users)
+        cracked_u, lk_u = crack_database(hdb, rt)
+        u_sr = calculate_success_rate(len(cracked_u), num_users)
+        W_u  = dict_size * T_h
+        log(f"  ║  [UNSALTED]   W = {dict_size:,} × {T_h:.8f} = {W_u:.6f}s"
+            f"   SR={u_sr:.0f}%  ⚠", "err")
 
-        unsalted_results.append({
-            "test_id":        i + 1,
-            "num_users":      num_users,
-            "dict_size":      dict_size,
-            "reuse_prob":     reuse_prob,
-            "success_rate":   u_success,
-            "attack_time":    u_time,
-            "precompute_time": precompute_time,
-            "lookup_time":    lookup_time,
-            "cracked":        len(cracked_u),
-            "hash_clusters":  sum(1 for c in hash_freq.values() if c > 1),
-            "hash_time":      hash_time,
-            "predicted_W":    dict_size * hash_time,
+        # ── Salted ────────────────────────────────────────────────────
+        sdb = hash_database_salted(users)
+        cracked_s, lk_s = attempt_rainbow_on_salted(sdb, rt)
+        s_sr = calculate_success_rate(len(cracked_s), num_users)
+        W_s  = num_users * dict_size * T_h
+        log(f"  ║  [SALTED]     W = {num_users}×{dict_size:,}×T_h = {W_s:.4f}s  (×{num_users})"
+            f"   SR={s_sr:.0f}%  ✔", "ok")
+
+        # ── Stretched ─────────────────────────────────────────────────
+        stdb = hash_database_stretched(users, iterations=k_iter)
+        cracked_st, lk_st = attempt_rainbow_on_stretched(stdb, rt)
+        st_sr = calculate_success_rate(len(cracked_st), num_users)
+        W_st  = num_users * dict_size * k_iter * T_h
+        log(f"  ║  [STRETCHED]  W = {num_users}×{dict_size:,}×{k_iter:,}×T_h = {W_st:.2f}s  (×{num_users*k_iter:,})"
+            f"   SR={st_sr:.0f}%  ✔", "ok")
+
+        # ── Peppered ──────────────────────────────────────────────────
+        pdb = hash_database_peppered(users, pepper=pepper)
+        cracked_p, lk_p = attempt_rainbow_on_peppered(pdb, rt)
+        p_sr = calculate_success_rate(len(cracked_p), num_users)
+        W_p_yr = (2**256) * num_users * dict_size * T_h / (365.25 * 24 * 3600)
+        log(f"  ║  [PEPPERED]   W ≈ {W_p_yr:.2e} years  (2²⁵⁶×N×|D|×T_h)"
+            f"   SR={p_sr:.0f}%  ✔", "ok")
+        log(f"  ╚{'═'*58}", "dim")
+        log("", "")
+
+        results["unsalted"].append({
+            "test_id": i+1, "num_users": num_users, "dict_size": dict_size,
+            "success_rate": u_sr, "attack_time": pre_t + lk_u,
+            "precompute_time": pre_t, "lookup_time": lk_u,
+            "cracked": len(cracked_u), "hash_time": T_h,
+            "predicted_W": W_u, "reuse_prob": reuse_prob,
+            "hash_clusters": sum(1 for c in freq.values() if c > 1),
+        })
+        results["salted"].append({
+            "test_id": i+1, "num_users": num_users, "dict_size": dict_size,
+            "success_rate": s_sr, "attack_time": lk_s, "cracked": len(cracked_s),
+            "salted_W": W_s, "speedup": num_users,
+        })
+        results["stretched"].append({
+            "test_id": i+1, "num_users": num_users, "dict_size": dict_size,
+            "success_rate": st_sr, "attack_time": lk_st, "cracked": len(cracked_st),
+            "stretched_W": W_st, "K": k_iter, "speedup": num_users * k_iter,
+        })
+        results["peppered"].append({
+            "test_id": i+1, "num_users": num_users, "dict_size": dict_size,
+            "success_rate": p_sr, "attack_time": lk_p, "cracked": len(cracked_p),
+            "work_years": W_p_yr,
         })
 
-        # ── Salted attack (rainbow reuse) ────────────────────────────────────
-        salted_db = hash_database_salted(users)
-        cracked_s, s_time = attempt_rainbow_on_salted(salted_db, rainbow_table)
+        if progress_cb:
+            progress_cb((i + 1) / num_tests * 100)
 
-        s_success = calculate_success_rate(len(cracked_s), num_users)
+    results["summary"] = _summarise(results)
+    _log_final(log, results["summary"])
+    return results
 
-        work_est = estimate_salted_work(num_users, dict_size, hash_time)
 
-        salted_results.append({
-            "test_id":              i + 1,
-            "num_users":            num_users,
-            "dict_size":            dict_size,
-            "success_rate":         s_success,   # expected 0%
-            "attack_time":          s_time,
-            "cracked":              len(cracked_s),
-            "salted_W_estimate":    work_est["salted_W"],
-            "speedup_factor":       work_est["speedup_factor_N"],
-            "salt_bits":            work_est["salt_space_bits"],
-        })
-
-        if callback:
-            callback(i + 1, num_users, dict_size, u_success, s_success, u_time)
-
-    # ── Summary statistics ───────────────────────────────────────────────────
-    summary = _compute_summary(unsalted_results, salted_results)
-
+def _summarise(results):
+    def avg(lst, k):
+        v = [r[k] for r in lst]
+        return sum(v) / len(v) if v else 0
+    u, s, st, p = results["unsalted"], results["salted"], results["stretched"], results["peppered"]
     return {
-        "unsalted": unsalted_results,
-        "salted":   salted_results,
-        "summary":  summary,
+        "num_tests": len(u),
+        "avg_unsalted_sr":    avg(u,  "success_rate"),
+        "avg_salted_sr":      avg(s,  "success_rate"),
+        "avg_stretched_sr":   avg(st, "success_rate"),
+        "avg_peppered_sr":    avg(p,  "success_rate"),
+        "avg_unsalted_time":  avg(u,  "attack_time"),
+        "avg_salted_time":    avg(s,  "attack_time"),
+        "avg_stretched_time": avg(st, "attack_time"),
+        "avg_peppered_time":  avg(p,  "attack_time"),
+        "tests_ge90":         sum(1 for r in u if r["success_rate"] >= 90),
+        "K_iterations":       st[0]["K"] if st else ITERATIONS,
     }
 
 
-def _compute_summary(unsalted: list, salted: list) -> dict:
-    if not unsalted:
-        return {}
-
-    u_rates   = [r["success_rate"] for r in unsalted]
-    s_rates   = [r["success_rate"] for r in salted]
-    u_times   = [r["attack_time"]  for r in unsalted]
-    s_times   = [r["attack_time"]  for r in salted]
-
-    avg_u_rate  = sum(u_rates)  / len(u_rates)
-    avg_s_rate  = sum(s_rates)  / len(s_rates)
-    avg_u_time  = sum(u_times)  / len(u_times)
-    avg_s_time  = sum(s_times)  / len(s_times)
-
-    tests_ge90  = sum(1 for r in u_rates if r >= 90)
-    improvement = [u - s for u, s in zip(u_rates, s_rates)]
-    avg_improve = sum(improvement) / len(improvement)
-
-    return {
-        "num_tests":          len(unsalted),
-        "avg_unsalted_rate":  avg_u_rate,
-        "avg_salted_rate":    avg_s_rate,
-        "avg_unsalted_time":  avg_u_time,
-        "avg_salted_time":    avg_s_time,
-        "tests_ge90_unsalted": tests_ge90,
-        "pct_tests_ge90":     (tests_ge90 / len(unsalted)) * 100,
-        "avg_security_improvement": avg_improve,
-    }
+def _log_final(log, s):
+    log("", "")
+    log("  ╔══════════════════════════════════════════════════════╗", "head")
+    log("  ║       F I N A L   C O M P A R A T I V E            ║", "head")
+    log("  ╚══════════════════════════════════════════════════════╝", "head")
+    log(f"  {'System':<18} {'Avg SR':>8}  {'Work Formula'}", "info")
+    log("  " + "─" * 60, "dim")
+    log(f"  {'Unsalted':<18} {s['avg_unsalted_sr']:>7.1f}%  W = |D| × T_h", "err")
+    log(f"  {'Salted':<18} {s['avg_salted_sr']:>7.1f}%  W = N × |D| × T_h", "ok")
+    log(f"  {'Stretched':<18} {s['avg_stretched_sr']:>7.1f}%  W = N × |D| × {s['K_iterations']:,} × T_h", "ok")
+    log(f"  {'Peppered':<18} {s['avg_peppered_sr']:>7.1f}%  W = 2²⁵⁶ × N × |D| × T_h", "ok")
+    log("", "")
+    log(f"  Unsalted tests ≥90%: {s['tests_ge90']}/{s['num_tests']}", "err")
+    log(f"  Stretching overhead: K={s['K_iterations']:,}× per password guess", "math")
+    log(f"  Pepper key space: 2²⁵⁶ ≈ 10⁷⁷  (offline attack: impossible)", "math")
+    log("", "")

@@ -1,317 +1,302 @@
 """
-Generate all required comparison graphs (minimum 4 mandatory + extras).
-
-Mandatory:
-  1. Before vs After Attack Success Rate
-  2. Time vs Dictionary Size (W = |D| × T_h)
-  3. CIA (Confidentiality / Integrity / Authentication) Rate
-  4. Attack vs Prevention Latency Overhead
-
-Additional:
-  5. Security Improvement Percentage per test
-  6. Hash Clustering — password reuse visualised
+Six publication-quality comparison graphs — four-way (unsalted / salted / stretched / peppered).
 """
 
 import matplotlib
-matplotlib.use('Agg')  # non-interactive backend for thread safety
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import numpy as np
 
-# ── Colour palette ───────────────────────────────────────────────────────────
-RED    = "#e74c3c"
-GREEN  = "#2ecc71"
-BLUE   = "#3498db"
-ORANGE = "#f39c12"
-PURPLE = "#9b59b6"
-DARK   = "#2c3e50"
-LIGHT  = "#ecf0f1"
+# Palette — monochrome + one accent
+BLACK  = "#000000"
+DARK   = "#0d0d0d"
+WHITE  = "#ffffff"
+GREEN  = "#00ff41"
+RED    = "#ef4444"
+AMBER  = "#f59e0b"
+BLUE   = "#60a5fa"
+PURPLE = "#a78bfa"
+DIM    = "#555555"
+
+SYSTEMS = ["Unsalted", "Salted", "Stretched", "Peppered"]
+COLS    = [RED, BLUE, AMBER, GREEN]
+MARKS   = ['X', 'o', 's', 'D']
 
 plt.rcParams.update({
-    "figure.facecolor": "white",
-    "axes.facecolor":   "#f8f9fa",
-    "axes.grid":        True,
-    "grid.alpha":       0.3,
-    "axes.spines.top":  False,
+    "figure.facecolor":  BLACK,
+    "axes.facecolor":    DARK,
+    "axes.edgecolor":    WHITE,
+    "axes.labelcolor":   WHITE,
+    "xtick.color":       WHITE,
+    "ytick.color":       WHITE,
+    "text.color":        WHITE,
+    "grid.color":        "#222222",
+    "grid.alpha":        0.5,
+    "axes.grid":         True,
+    "axes.spines.top":   False,
     "axes.spines.right": False,
-    "font.size":        11,
+    "font.family":       "monospace",
+    "font.size":         10,
+    "legend.facecolor":  DARK,
+    "legend.edgecolor":  DIM,
+    "legend.labelcolor": WHITE,
 })
 
 
-# ── Graph 1: Before vs After Attack Success Rate ─────────────────────────────
-def plot_success_rate_comparison(unsalted: list, salted: list) -> plt.Figure:
-    fig, ax = plt.subplots(figsize=(11, 6))
+# ── Graph 1: Four-way Success Rate ───────────────────────────────────────────
+def plot_success_rate(r: dict) -> plt.Figure:
+    fig, ax = plt.subplots(figsize=(12, 6), facecolor=BLACK)
+    ax.set_facecolor(DARK)
+    keys = ["unsalted", "salted", "stretched", "peppered"]
 
-    ids  = [r["test_id"]      for r in unsalted]
-    u_sr = [r["success_rate"] for r in unsalted]
-    s_sr = [r["success_rate"] for r in salted]
+    for key, col, mk, label in zip(keys, COLS, MARKS, SYSTEMS):
+        ids = [x["test_id"]      for x in r[key]]
+        srs = [x["success_rate"] for x in r[key]]
+        ax.plot(ids, srs, color=col, marker=mk, linewidth=1.8,
+                markersize=5, label=label, alpha=0.9)
+        ax.fill_between(ids, srs, alpha=0.06, color=col)
 
-    ax.plot(ids, u_sr, color=RED,   marker='o', linewidth=2,
-            markersize=5, label="Unsalted SHA-256 (Vulnerable)")
-    ax.plot(ids, s_sr, color=GREEN, marker='s', linewidth=2,
-            markersize=5, label="Salted SHA-256 (Secure)")
-    ax.axhline(y=90, color=ORANGE, linestyle='--', linewidth=1.5,
-               label="90 % Attack-Success Threshold")
-
-    ax.fill_between(ids, u_sr, alpha=0.12, color=RED)
-    ax.fill_between(ids, s_sr, alpha=0.12, color=GREEN)
-
-    avg_u = sum(u_sr) / len(u_sr)
-    avg_s = sum(s_sr) / len(s_sr)
-    ax.axhline(y=avg_u, color=RED,   linestyle=':', linewidth=1,
-               label=f"Avg Unsalted {avg_u:.1f}%")
-    ax.axhline(y=avg_s, color=GREEN, linestyle=':', linewidth=1,
-               label=f"Avg Salted  {avg_s:.1f}%")
-
-    ax.set_xlabel("Test Case ID")
-    ax.set_ylabel("Attack Success Rate (%)")
-    ax.set_title("Graph 1 — Before vs After Prevention: Attack Success Rate",
-                 fontweight='bold', pad=12)
+    ax.axhline(90, color=WHITE, linestyle='--', linewidth=0.8, alpha=0.4,
+               label="90% threshold")
+    ax.set_xlabel("Test Case  ID")
+    ax.set_ylabel("Attack Success Rate  (%)")
+    ax.set_title("GRAPH 1 — Attack Success Rate: All Four Systems",
+                 color=WHITE, fontweight='bold', pad=14, fontsize=12)
     ax.set_ylim(-5, 110)
-    ax.set_xlim(0.5, len(ids) + 0.5)
-    ax.legend(loc='center right', fontsize=9)
-
-    # Vulnerability band annotation
-    ax.annotate("VULNERABLE ZONE", xy=(len(ids) * 0.5, 95),
-                fontsize=9, color=RED, alpha=0.6, ha='center')
-    ax.annotate("SECURE ZONE", xy=(len(ids) * 0.5, 5),
-                fontsize=9, color=GREEN, alpha=0.7, ha='center')
-
+    ax.legend(framealpha=0.3)
     fig.tight_layout()
     return fig
 
 
-# ── Graph 2: Time vs Dictionary Size ─────────────────────────────────────────
-def plot_time_vs_dict_size(unsalted: list) -> plt.Figure:
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 6))
+# ── Graph 2: Work formula validation — Time vs |D| ───────────────────────────
+def plot_work_validation(r: dict) -> plt.Figure:
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 6), facecolor=BLACK)
+    for ax in (ax1, ax2):
+        ax.set_facecolor(DARK)
 
-    sizes  = np.array([r["dict_size"]       for r in unsalted])
-    pre_t  = np.array([r["precompute_time"] for r in unsalted])
-    tot_t  = np.array([r["attack_time"]     for r in unsalted])
-    pred_W = np.array([r["predicted_W"]     for r in unsalted])
+    u = r["unsalted"]
+    sizes = np.array([x["dict_size"]        for x in u])
+    pre_t = np.array([x["precompute_time"]  for x in u])
+    pred  = np.array([x["predicted_W"]      for x in u])
 
-    # — Left: scatter of actual times vs |D| —
-    ax1.scatter(sizes, pre_t, c=BLUE,   alpha=0.75, s=60, label="Precompute Time (actual)")
-    ax1.scatter(sizes, tot_t, c=RED,    alpha=0.75, s=60, label="Total Attack Time")
-    ax1.scatter(sizes, pred_W, c=GREEN, alpha=0.75, s=60, marker='^',
-                label="Predicted W = |D|·T_h")
-
-    # Linear trend
+    ax1.scatter(sizes, pre_t, color=RED,   s=55, alpha=0.8, label="actual precompute")
+    ax1.scatter(sizes, pred,  color=GREEN, s=55, alpha=0.8, marker='^', label="predicted W=|D|·T_h")
     z = np.polyfit(sizes, pre_t, 1)
-    p = np.poly1d(z)
     xs = np.linspace(sizes.min(), sizes.max(), 200)
-    ax1.plot(xs, p(xs), '--', color=BLUE, linewidth=1.5, alpha=0.6)
-
-    ax1.set_xlabel("Dictionary Size  |D|")
-    ax1.set_ylabel("Time (seconds)")
-    ax1.set_title("Precompute Time vs |D|", fontweight='bold')
+    ax1.plot(xs, np.poly1d(z)(xs), '--', color=WHITE, linewidth=1, alpha=0.5)
+    ax1.set_xlabel("|D|  (dictionary size)")
+    ax1.set_ylabel("time  (s)")
+    ax1.set_title("W = |D| × T_h  validation", fontweight='bold')
     ax1.legend(fontsize=8)
 
-    # — Right: scatter of predicted vs actual (should be ≈ diagonal) —
-    ax2.scatter(pred_W, pre_t, c=PURPLE, alpha=0.75, s=60)
-    lim = max(pred_W.max(), pre_t.max()) * 1.1
-    ax2.plot([0, lim], [0, lim], 'k--', linewidth=1.2, label="y = x  (perfect match)")
-    ax2.set_xlabel("Predicted  W = |D| × T_h  (sec)")
-    ax2.set_ylabel("Actual Precompute Time (sec)")
-    ax2.set_title("Mathematical Validation\nW = |D| × T_h", fontweight='bold')
+    # Predicted vs actual scatter
+    lim = max(pred.max(), pre_t.max()) * 1.1
+    ax2.scatter(pred, pre_t, color=BLUE, s=55, alpha=0.8)
+    ax2.plot([0, lim], [0, lim], '--', color=WHITE, linewidth=1, alpha=0.5, label="y = x  (perfect)")
+    ax2.set_xlabel("predicted  W  (s)")
+    ax2.set_ylabel("actual precompute  (s)")
+    ax2.set_title("Mathematical Validation\nPredicted vs Observed", fontweight='bold')
     ax2.legend(fontsize=8)
-    ax2.set_xlim(0, lim)
-    ax2.set_ylim(0, lim)
+    ax2.set_xlim(0, lim); ax2.set_ylim(0, lim)
 
-    fig.suptitle("Graph 2 — Time vs Dictionary Size  (W = |D| × T_h)",
-                 fontweight='bold', fontsize=13, y=1.01)
+    fig.suptitle("GRAPH 2 — Time vs Dictionary Size  /  Work Formula Proof",
+                 fontweight='bold', fontsize=12, color=WHITE)
     fig.tight_layout()
     return fig
 
 
-# ── Graph 3: CIA Rate ─────────────────────────────────────────────────────────
-def plot_cia_comparison(unsalted: list, salted: list) -> plt.Figure:
-    fig, axes = plt.subplots(1, 2, figsize=(13, 6))
+# ── Graph 3: CIA radar — four systems ────────────────────────────────────────
+def plot_cia(r: dict) -> plt.Figure:
+    fig = plt.figure(figsize=(13, 6), facecolor=BLACK)
 
-    avg_u = sum(r["success_rate"] for r in unsalted) / len(unsalted)
-    avg_s = sum(r["success_rate"] for r in salted)   / len(salted)
+    def cia(sr):
+        return {
+            "Confidentiality": max(0, 100 - sr),
+            "Integrity":       max(0, 100 - sr * 0.85),
+            "Authentication":  max(0, 100 - sr * 0.90),
+        }
 
-    # Derive CIA scores
-    # Confidentiality — % of passwords NOT recovered
-    # Integrity       — whether stored data can be trusted (correlated with cracked rate)
-    # Authentication  — how reliably the system can distinguish legit vs attacker
-
-    def cia_scores(crack_rate: float) -> dict:
-        c = max(0.0, 100.0 - crack_rate)
-        i = max(0.0, 100.0 - crack_rate * 0.85)
-        a = max(0.0, 100.0 - crack_rate * 0.90)
-        return {"Confidentiality": c, "Integrity": i, "Authentication": a}
-
-    u_cia = cia_scores(avg_u)
-    s_cia = cia_scores(avg_s)
-
-    cats  = list(u_cia.keys())
-    x     = np.arange(len(cats))
-    width = 0.35
-
-    # — Bar chart —
-    ax = axes[0]
-    b1 = ax.bar(x - width / 2, [u_cia[c] for c in cats], width,
-                color=RED,   alpha=0.85, label="Unsalted (Vulnerable)")
-    b2 = ax.bar(x + width / 2, [s_cia[c] for c in cats], width,
-                color=GREEN, alpha=0.85, label="Salted (Secure)")
-
-    for bar in [*b1, *b2]:
-        h = bar.get_height()
-        ax.text(bar.get_x() + bar.get_width() / 2, h + 1,
-                f"{h:.1f}%", ha='center', va='bottom', fontsize=9)
-
-    ax.set_xticks(x)
-    ax.set_xticklabels(cats)
-    ax.set_ylim(0, 118)
-    ax.set_ylabel("Security Score (%)")
-    ax.set_title("CIA Security Scores", fontweight='bold')
-    ax.legend()
-
-    # — Radar / spider chart —
-    ax2 = axes[1]
-    categories = cats + [cats[0]]   # close the polygon
-    N = len(cats)
+    keys   = ["unsalted", "salted", "stretched", "peppered"]
+    avgs   = {k: sum(x["success_rate"] for x in r[k]) / len(r[k]) for k in keys}
+    cats   = ["Confidentiality", "Integrity", "Authentication"]
+    N      = len(cats)
     angles = np.linspace(0, 2 * np.pi, N, endpoint=False).tolist()
     angles += angles[:1]
 
-    u_vals = [u_cia[c] for c in cats] + [u_cia[cats[0]]]
-    s_vals = [s_cia[c] for c in cats] + [s_cia[cats[0]]]
+    # Bar chart
+    ax_bar = fig.add_subplot(121)
+    ax_bar.set_facecolor(DARK)
+    x     = np.arange(N)
+    width = 0.2
+    for idx, (key, col, label) in enumerate(zip(keys, COLS, SYSTEMS)):
+        vals = [cia(avgs[key])[c] for c in cats]
+        bars = ax_bar.bar(x + idx * width - width * 1.5, vals, width,
+                          color=col, alpha=0.85, label=label)
+        for bar in bars:
+            h = bar.get_height()
+            ax_bar.text(bar.get_x() + width / 2, h + 1,
+                        f"{h:.0f}", ha='center', fontsize=7, color=WHITE)
 
-    ax2 = fig.add_subplot(122, polar=True)
-    ax2.plot(angles, u_vals, color=RED,   linewidth=2, label="Unsalted")
-    ax2.fill(angles, u_vals, color=RED,   alpha=0.20)
-    ax2.plot(angles, s_vals, color=GREEN, linewidth=2, label="Salted")
-    ax2.fill(angles, s_vals, color=GREEN, alpha=0.20)
+    ax_bar.set_xticks(x)
+    ax_bar.set_xticklabels(cats)
+    ax_bar.set_ylim(0, 115)
+    ax_bar.set_ylabel("Security Score (%)")
+    ax_bar.set_title("CIA Bar Comparison", fontweight='bold')
+    ax_bar.legend(fontsize=8)
 
-    ax2.set_xticks(angles[:-1])
-    ax2.set_xticklabels(cats, fontsize=10)
-    ax2.set_ylim(0, 100)
-    ax2.set_title("CIA Radar", fontweight='bold', pad=15)
-    ax2.legend(loc='upper right', bbox_to_anchor=(1.3, 1.15), fontsize=9)
+    # Radar
+    ax_r = fig.add_subplot(122, polar=True)
+    ax_r.set_facecolor(DARK)
+    ax_r.tick_params(colors=WHITE)
+    for key, col, label in zip(keys, COLS, SYSTEMS):
+        vals = [cia(avgs[key])[c] for c in cats] + [cia(avgs[key])[cats[0]]]
+        ax_r.plot(angles, vals, color=col, linewidth=2, label=label)
+        ax_r.fill(angles, vals, alpha=0.08, color=col)
+    ax_r.set_xticks(angles[:-1])
+    ax_r.set_xticklabels(cats, color=WHITE, fontsize=9)
+    ax_r.set_ylim(0, 100)
+    ax_r.set_title("CIA Radar", color=WHITE, fontweight='bold', pad=18)
+    ax_r.legend(loc='upper right', bbox_to_anchor=(1.4, 1.15), fontsize=8)
+    ax_r.grid(color=DIM, alpha=0.4)
 
-    fig.suptitle("Graph 3 — Confidentiality / Integrity / Authentication Rate",
-                 fontweight='bold', fontsize=13)
+    fig.suptitle("GRAPH 3 — Confidentiality / Integrity / Authentication",
+                 fontweight='bold', fontsize=12, color=WHITE)
     fig.tight_layout()
     return fig
 
 
-# ── Graph 4: Attack vs Prevention Latency Overhead ───────────────────────────
-def plot_latency_overhead(unsalted: list, salted: list) -> plt.Figure:
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 6))
+# ── Graph 4: Latency overhead — four systems ─────────────────────────────────
+def plot_latency(r: dict) -> plt.Figure:
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 6), facecolor=BLACK)
+    for ax in (ax1, ax2):
+        ax.set_facecolor(DARK)
 
-    ids    = np.array([r["test_id"]    for r in unsalted])
-    u_pre  = np.array([r["precompute_time"] for r in unsalted])
-    u_look = np.array([r["lookup_time"]     for r in unsalted])
-    s_time = np.array([r["attack_time"]     for r in salted])
+    keys  = ["unsalted", "salted", "stretched", "peppered"]
+    times = [[x["attack_time"] for x in r[k]] for k in keys]
+    ids   = [x["test_id"] for x in r["unsalted"]]
 
-    # — Stacked bar: breakdown of unsalted attack time —
-    ax1.bar(ids, u_pre,  color=BLUE,   label="Precompute (build table)", alpha=0.85)
-    ax1.bar(ids, u_look, bottom=u_pre, color=RED, label="Lookup (crack DB)", alpha=0.85)
-    ax1.plot(ids, s_time, color=GREEN, marker='D', linewidth=2, markersize=5,
-             label="Salted (failed) attack time")
+    for t, col, label, mk in zip(times, COLS, SYSTEMS, MARKS):
+        ax1.plot(ids, t, color=col, marker=mk, linewidth=1.5,
+                 markersize=4, label=label, alpha=0.85)
 
-    ax1.set_xlabel("Test Case ID")
-    ax1.set_ylabel("Time (seconds)")
-    ax1.set_title("Per-Test Attack Time Breakdown", fontweight='bold')
+    ax1.set_xlabel("Test ID")
+    ax1.set_ylabel("Attack Time  (s)")
+    ax1.set_title("Per-Test Attack Time\n(All Systems)", fontweight='bold')
     ax1.legend(fontsize=8)
+    ax1.set_yscale('log')
 
-    # — Box plots: distribution comparison —
-    data   = [u_pre, u_look, s_time]
-    labels = ["Precompute\n(unsalted)", "Lookup\n(unsalted)", "Salted\nAttempt"]
-    colours= [BLUE, RED, GREEN]
-
-    bp = ax2.boxplot(data, patch_artist=True, labels=labels,
-                     medianprops=dict(color='black', linewidth=2))
-    for patch, col in zip(bp['boxes'], colours):
+    bp = ax2.boxplot(times, patch_artist=True,
+                     labels=SYSTEMS,
+                     medianprops=dict(color=WHITE, linewidth=2))
+    for patch, col in zip(bp['boxes'], COLS):
         patch.set_facecolor(col)
         patch.set_alpha(0.75)
+    ax2.set_ylabel("Attack Time  (s)  [log]")
+    ax2.set_title("Latency Distribution\n(box plot)", fontweight='bold')
+    ax2.set_yscale('log')
 
-    ax2.set_ylabel("Time (seconds)")
-    ax2.set_title("Latency Distribution\n(Unsalted Attack vs Salted Defence)", fontweight='bold')
-
-    fig.suptitle("Graph 4 — Attack vs Prevention Latency Overhead",
-                 fontweight='bold', fontsize=13)
+    fig.suptitle("GRAPH 4 — Attack vs Prevention Latency Overhead",
+                 fontweight='bold', fontsize=12, color=WHITE)
     fig.tight_layout()
     return fig
 
 
-# ── Graph 5: Security Improvement % ─────────────────────────────────────────
-def plot_security_improvement(unsalted: list, salted: list) -> plt.Figure:
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 6))
+# ── Graph 5: Security improvement % ─────────────────────────────────────────
+def plot_improvement(r: dict) -> plt.Figure:
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 6), facecolor=BLACK)
+    for ax in (ax1, ax2):
+        ax.set_facecolor(DARK)
 
-    ids = [r["test_id"] for r in unsalted]
-    improvements = [u["success_rate"] - s["success_rate"]
-                    for u, s in zip(unsalted, salted)]
-    colours = [GREEN if v >= 80 else ORANGE for v in improvements]
+    ids = [x["test_id"] for x in r["unsalted"]]
+    u_sr = np.array([x["success_rate"] for x in r["unsalted"]])
 
-    ax1.bar(ids, improvements, color=colours, alpha=0.85, edgecolor='white')
-    ax1.axhline(y=90, color=RED, linestyle='--', linewidth=1.5, label="90% target")
-    ax1.set_xlabel("Test Case ID")
-    ax1.set_ylabel("Improvement in Attack Success Rate (pp)")
-    ax1.set_title("Security Improvement\n(Unsalted → Salted)", fontweight='bold')
-    ax1.set_ylim(0, 115)
-    ax1.legend()
+    for key, col, label in zip(
+        ["salted", "stretched", "peppered"],
+        [BLUE, AMBER, GREEN],
+        ["Salted", "Stretched", "Peppered"],
+    ):
+        other_sr = np.array([x["success_rate"] for x in r[key]])
+        delta = u_sr - other_sr
+        ax1.bar(ids, delta, color=col, alpha=0.7, label=label,
+                bottom=0, width=0.25,
+                align='center')
 
-    green_patch = mpatches.Patch(color=GREEN, label='≥ 80 pp improvement')
-    orange_patch = mpatches.Patch(color=ORANGE, label='< 80 pp improvement')
-    ax1.legend(handles=[green_patch, orange_patch,
-               mpatches.Patch(color=RED, label='90% target')], fontsize=8)
+    ax1.axhline(90, color=WHITE, linestyle='--', linewidth=0.8, alpha=0.5)
+    ax1.set_xlabel("Test ID")
+    ax1.set_ylabel("Improvement over Unsalted  (pp)")
+    ax1.set_title("Security Gain vs Unsalted Baseline", fontweight='bold')
+    ax1.legend(fontsize=8)
 
-    # — Cumulative improvement —
-    cum = np.cumsum(improvements)
-    ax2.plot(ids, cum, color=PURPLE, linewidth=2, marker='o', markersize=4)
-    ax2.fill_between(ids, 0, cum, alpha=0.15, color=PURPLE)
-    ax2.set_xlabel("Test Case ID")
-    ax2.set_ylabel("Cumulative Improvement (pp)")
-    ax2.set_title("Cumulative Security Gain\nAcross All Tests", fontweight='bold')
-
-    fig.suptitle("Graph 5 — Security Improvement: Salting vs No Salting",
-                 fontweight='bold', fontsize=13)
-    fig.tight_layout()
-    return fig
-
-
-# ── Graph 6: Hash Clustering (password reuse) ────────────────────────────────
-def plot_hash_clustering(unsalted: list) -> plt.Figure:
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 6))
-
-    n_users   = [r["num_users"]    for r in unsalted]
-    clusters  = [r["hash_clusters"] for r in unsalted]
-    reuse     = [r["reuse_prob"]    for r in unsalted]
-
-    sc = ax1.scatter(n_users, clusters, c=reuse, cmap='RdYlGn_r',
-                     s=70, alpha=0.85, edgecolors='white', linewidths=0.5)
-    cbar = fig.colorbar(sc, ax=ax1)
-    cbar.set_label("Reuse Probability", fontsize=9)
-    ax1.set_xlabel("Number of Users (N)")
-    ax1.set_ylabel("Hash Clusters (identical hashes)")
-    ax1.set_title("Hash Clustering vs User Count\n(higher = more vulnerable)", fontweight='bold')
-
-    # — Reuse probability distribution —
-    ax2.hist(reuse, bins=10, color=ORANGE, alpha=0.85, edgecolor='white')
-    ax2.set_xlabel("Reuse Probability")
-    ax2.set_ylabel("Test Count")
-    ax2.set_title("Distribution of Reuse Probabilities\nAcross Tests", fontweight='bold')
-
-    fig.suptitle("Graph 6 — Password Reuse & Hash Clustering (Unsalted Weakness)",
-                 fontweight='bold', fontsize=13)
-    fig.tight_layout()
-    return fig
-
-
-# ── Public entry point ────────────────────────────────────────────────────────
-def generate_all_graphs(comparison_results: dict) -> list:
-    """Return a list of all matplotlib Figure objects."""
-    u = comparison_results["unsalted"]
-    s = comparison_results["salted"]
-
-    figs = [
-        plot_success_rate_comparison(u, s),
-        plot_time_vs_dict_size(u),
-        plot_cia_comparison(u, s),
-        plot_latency_overhead(u, s),
-        plot_security_improvement(u, s),
-        plot_hash_clustering(u),
+    # Grouped bar — average
+    avgs  = [
+        sum(x["success_rate"] for x in r[k]) / len(r[k])
+        for k in ["unsalted", "salted", "stretched", "peppered"]
     ]
-    return figs
+    x = np.arange(len(SYSTEMS))
+    bars = ax2.bar(x, avgs, color=COLS, alpha=0.85, edgecolor=WHITE, linewidth=0.5)
+    for bar, val in zip(bars, avgs):
+        ax2.text(bar.get_x() + bar.get_width() / 2, val + 1,
+                 f"{val:.1f}%", ha='center', fontsize=9, color=WHITE)
+    ax2.set_xticks(x)
+    ax2.set_xticklabels(SYSTEMS)
+    ax2.set_ylim(0, 115)
+    ax2.set_ylabel("Average Attack Success Rate  (%)")
+    ax2.set_title("Mean Success Rate — All Systems", fontweight='bold')
+
+    fig.suptitle("GRAPH 5 — Security Improvement Across Prevention Methods",
+                 fontweight='bold', fontsize=12, color=WHITE)
+    fig.tight_layout()
+    return fig
+
+
+# ── Graph 6: Work complexity — log-scale comparison ─────────────────────────
+def plot_work_complexity(r: dict) -> plt.Figure:
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(13, 6), facecolor=BLACK)
+    for ax in (ax1, ax2):
+        ax.set_facecolor(DARK)
+
+    u = r["unsalted"]
+    sizes  = np.array([x["dict_size"]  for x in u])
+    W_u    = np.array([x["predicted_W"] for x in u])
+    W_s    = np.array([x["dict_size"] * x["num_users"] * x["hash_time"] for x in u])
+    K      = r["stretched"][0]["K"]
+    W_st   = np.array([x["dict_size"] * x["num_users"] * K * x["hash_time"] for x in u])
+
+    ax1.scatter(sizes, W_u,  color=RED,   s=45, alpha=0.8, label="Unsalted")
+    ax1.scatter(sizes, W_s,  color=BLUE,  s=45, alpha=0.8, label="Salted")
+    ax1.scatter(sizes, W_st, color=AMBER, s=45, alpha=0.8, label=f"Stretched K={K:,}")
+    ax1.set_xlabel("|D|  (dictionary size)")
+    ax1.set_ylabel("Theoretical Work W  (s)  [log]")
+    ax1.set_title("Work Complexity vs |D|", fontweight='bold')
+    ax1.set_yscale('log')
+    ax1.legend(fontsize=8)
+
+    # Hash clustering
+    clusters = np.array([x["hash_clusters"] for x in u])
+    reuse    = np.array([x["reuse_prob"]     for x in u])
+    n_users  = np.array([x["num_users"]      for x in u])
+    sc = ax2.scatter(n_users, clusters, c=reuse, cmap='RdYlGn_r',
+                     s=60, alpha=0.85, edgecolors=WHITE, linewidths=0.3)
+    cb = fig.colorbar(sc, ax=ax2)
+    cb.set_label("Reuse Probability", color=WHITE)
+    cb.ax.yaxis.set_tick_params(color=WHITE)
+    plt.setp(cb.ax.yaxis.get_ticklabels(), color=WHITE)
+    ax2.set_xlabel("Number of Users  N")
+    ax2.set_ylabel("Duplicate Hash Clusters")
+    ax2.set_title("Hash Clustering\n(unsalted weakness)", fontweight='bold')
+
+    fig.suptitle("GRAPH 6 — Work Complexity & Hash Clustering",
+                 fontweight='bold', fontsize=12, color=WHITE)
+    fig.tight_layout()
+    return fig
+
+
+def generate_all_graphs(results: dict) -> list:
+    return [
+        plot_success_rate(results),
+        plot_work_validation(results),
+        plot_cia(results),
+        plot_latency(results),
+        plot_improvement(results),
+        plot_work_complexity(results),
+    ]

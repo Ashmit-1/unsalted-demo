@@ -18,559 +18,515 @@ Layout
 │  STATUS BAR  ●  VULNERABLE / ● SECURE / ● READY        │
 └─────────────────────────────────────────────────────────┘
 """
+"""
+Password Hash Attack & Prevention — Final Review GUI
 
-import os
+Aesthetic: Bloomberg terminal × Dieter Rams.
+4 colours: #000000 · #0d0d0d · #ffffff · #00ff41
+Font: JetBrains Mono / Courier New fallback.
+"""
+
+import threading
+import csv
+import random
 import sys
 
-# Ensure Tcl/Tk library paths are available at runtime (helps virtualenvs
-# and some PyInstaller/packaging scenarios where init.tcl isn't found).
-def _ensure_tcl_tk():
-    if os.name != "nt":
-        return
-    base = getattr(sys, "base_prefix", sys.prefix)
-    candidates = [
-        os.path.join(base, "tcl", "tcl8.6"),
-        os.path.join(base, "tcl", "tk8.6"),
-        os.path.join(base, "tcl"),
-        os.path.join(sys.exec_prefix, "tcl", "tcl8.6"),
-    ]
-    for cand in candidates:
-        if not cand or not os.path.isdir(cand):
-            continue
-        for root, dirs, files in os.walk(cand):
-            if "init.tcl" in files:
-                # Force-set TCL/TK to the discovered install paths so tkinter
-                # doesn't try to use stale temporary extraction paths.
-                os.environ["TCL_LIBRARY"] = root
-                tk_root = root.replace("tcl8.6", "tk8.6")
-                if os.path.isdir(tk_root):
-                    os.environ["TK_LIBRARY"] = tk_root
-                return
-    # no debug output
-
-
-_ensure_tcl_tk()
+try:
+    import customtkinter as ctk
+except ImportError:
+    print("Install customtkinter:  pip install customtkinter")
+    sys.exit(1)
 
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
-import threading
-import random
-import csv
-import io
-import sys
+from tkinter import filedialog, messagebox
+import tkinter.ttk as ttk
 
 import matplotlib
 matplotlib.use("TkAgg")
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
-import matplotlib.pyplot as plt
 
-from database_generator import generate_dictionary, generate_users
-from unsalted_system import hash_database
-from attacker_unsalted import build_rainbow_table, crack_database
-from salted_system import hash_database_salted
-from attacker_salted import attempt_rainbow_on_salted, estimate_salted_work
-from comparison_runner import run_comparison
-from graph_generator import generate_all_graphs
-from metrics import calculate_success_rate, estimate_work_unsalted
+from comparison_runner import run_full_comparison
+from metrics import calculate_success_rate
 
-# ── Palette ──────────────────────────────────────────────────────────────────
-BG       = "#1e1e2e"
-PANEL    = "#2a2a3e"
-ACCENT   = "#7c3aed"
-RED      = "#ef4444"
-GREEN    = "#22c55e"
-YELLOW   = "#f59e0b"
-FG       = "#e2e8f0"
-FG_DIM   = "#94a3b8"
-MONO     = "Consolas" if sys.platform == "win32" else "Courier New"
+# ── Palette (4 values only) ───────────────────────────────────────────────────
+BK   = "#000000"    # main background
+PNL  = "#0d0d0d"    # panel / card surface
+WH   = "#ffffff"    # primary text, active borders
+GRN  = "#00ff41"    # single accent
+DIM  = "#333333"    # inactive borders
+MID  = "#555555"    # dim text
+RED  = "#ef4444"    # error (not in palette — UI necessity)
+MONO = "Courier New"
 
-FONT_H1  = ("Segoe UI", 16, "bold")
-FONT_H2  = ("Segoe UI", 11, "bold")
-FONT_BTN = ("Segoe UI", 10, "bold")
-FONT_LOG = (MONO, 10)
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("dark-blue")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-class App(tk.Tk):
+class App(ctk.CTk):
     def __init__(self):
         super().__init__()
-        self.title("Password Hash Attack & Prevention — Final Review")
-        self.geometry("1100x720")
-        self.minsize(900, 600)
-        self.configure(bg=BG)
+        self.title("")
+        self.geometry("1200x780")
+        self.minsize(960, 640)
+        self.configure(fg_color=BK)
+        self.overrideredirect(True)
 
-        # ── State ─────────────────────────────────────────────────────────
-        self._status       = "ready"      # ready | running | vulnerable | secure
-        self._results      = None         # comparison results dict
-        self._stop_event   = threading.Event()
-        self._graph_figs   = []
+        self._drag_x = self._drag_y = 0
+        self._blink  = True
+        self._stop   = threading.Event()
+        self._results = None
+        self._is_fullscreen = False
+        self.bind("<Map>", self._on_map)
 
-        # ── Parameter variables ───────────────────────────────────────────
-        self.v_num_tests   = tk.IntVar(value=25)
-        self.v_dict_size   = tk.IntVar(value=2000)
-        self.v_num_users   = tk.IntVar(value=200)
-        self.v_reuse       = tk.DoubleVar(value=0.70)
+        self.attributes("-alpha", 0.0)
+        self.after(10, lambda: self._fade(0.0))
 
-        self._build_ui()
-        self._log_banner()
+        self._build()
+        self._tick_cursor()
 
-    # ══════════════════════════════════════════════════════════════════════
-    # UI CONSTRUCTION
-    # ══════════════════════════════════════════════════════════════════════
+    # ── Fade-in ───────────────────────────────────────────────────────────────
+    def _fade(self, a=0.0):
+        a = min(a + 0.06, 1.0)
+        self.attributes("-alpha", a)
+        if a < 1.0:
+            self.after(12, lambda: self._fade(a))
 
-    def _build_ui(self):
-        # ── Header ────────────────────────────────────────────────────────
-        hdr = tk.Frame(self, bg=ACCENT, height=54)
-        hdr.pack(fill=tk.X, side=tk.TOP)
-        tk.Label(
-            hdr, text="🔐  Password Hash Attack & Prevention",
-            font=FONT_H1, bg=ACCENT, fg="white", pady=10
-        ).pack(side=tk.LEFT, padx=18)
-        tk.Label(
-            hdr, text="Final Review — Unsalted vs Salted SHA-256",
-            font=("Segoe UI", 10), bg=ACCENT, fg="#ddd6fe", pady=10
-        ).pack(side=tk.LEFT)
+    # ── Drag ─────────────────────────────────────────────────────────────────
+    def _press(self, e):
+        self._drag_x, self._drag_y = e.x_root, e.y_root
 
-        # ── Main body ─────────────────────────────────────────────────────
-        body = tk.Frame(self, bg=BG)
-        body.pack(fill=tk.BOTH, expand=True, padx=10, pady=(6, 4))
+    def _drag(self, e):
+        self.geometry(f"+{self.winfo_x()+e.x_root-self._drag_x}"
+                      f"+{self.winfo_y()+e.y_root-self._drag_y}")
+        self._drag_x, self._drag_y = e.x_root, e.y_root
 
-        # Left panel
-        left = tk.Frame(body, bg=PANEL, width=230)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 8))
-        left.pack_propagate(False)
-        self._build_left_panel(left)
+    def _minimize(self):
+        self.overrideredirect(False)
+        self.iconify()
 
-        # Right panel (log)
-        right = tk.Frame(body, bg=PANEL)
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._build_log_panel(right)
+    def _on_map(self, e):
+        if str(e.widget) == str(self) and self.wm_state() == "normal":
+            self.overrideredirect(True)
 
-        # ── Status bar ────────────────────────────────────────────────────
-        self._status_bar = tk.Frame(self, bg=PANEL, height=36)
-        self._status_bar.pack(fill=tk.X, side=tk.BOTTOM, padx=10, pady=(0, 6))
-        self._status_dot  = tk.Label(self._status_bar, text="●", font=("Segoe UI", 16),
-                                     bg=PANEL, fg=FG_DIM)
-        self._status_dot.pack(side=tk.LEFT, padx=(12, 6))
-        self._status_label = tk.Label(self._status_bar, text="READY — Generate parameters to begin",
-                                      font=("Segoe UI", 10), bg=PANEL, fg=FG_DIM)
-        self._status_label.pack(side=tk.LEFT)
-        self._prog_var = tk.DoubleVar()
-        self._prog = ttk.Progressbar(self._status_bar, variable=self._prog_var,
-                                     maximum=100, length=180)
-        self._prog.pack(side=tk.RIGHT, padx=12)
-
-    # ─────────────────────────────────────────────────────────────────────
-    def _build_left_panel(self, parent):
-        tk.Label(parent, text="⚙  Parameters", font=FONT_H2,
-                 bg=PANEL, fg=FG, pady=8).pack(fill=tk.X, padx=10)
-
-        ttk.Separator(parent, orient='horizontal').pack(fill=tk.X, padx=8)
-
-        params = [
-            ("Num Tests",    self.v_num_tests,  5,   50),
-            ("Dict Size",    self.v_dict_size,  500, 5000),
-            ("Users/Test",   self.v_num_users,  50,  500),
-            ("Reuse Prob",   self.v_reuse,      0.3, 1.0),
-        ]
-
-        for label, var, lo, hi in params:
-            frm = tk.Frame(parent, bg=PANEL)
-            frm.pack(fill=tk.X, padx=12, pady=4)
-            tk.Label(frm, text=label, font=("Segoe UI", 9), bg=PANEL, fg=FG_DIM,
-                     width=10, anchor='w').pack(side=tk.LEFT)
-            if isinstance(var, tk.IntVar):
-                tk.Spinbox(frm, from_=lo, to=hi, textvariable=var,
-                           width=6, font=("Segoe UI", 9)).pack(side=tk.RIGHT)
-            else:
-                tk.Spinbox(frm, from_=lo, to=hi, textvariable=var,
-                           increment=0.05, format="%.2f",
-                           width=6, font=("Segoe UI", 9)).pack(side=tk.RIGHT)
-
-        ttk.Separator(parent, orient='horizontal').pack(fill=tk.X, padx=8, pady=8)
-        tk.Label(parent, text="▶  Actions", font=FONT_H2,
-                 bg=PANEL, fg=FG).pack(fill=tk.X, padx=10)
-
-        actions = [
-            ("🗂  Generate Parameters", self._btn_generate, "#334155"),
-            ("💀  Run Attack",          self._btn_attack,   RED),
-            ("🛡  Apply Prevention",    self._btn_prevent,  GREEN),
-            ("📊  Show Graphs",         self._btn_graphs,   ACCENT),
-            ("💾  Export CSV",          self._btn_export,   "#0369a1"),
-            ("🗑  Clear Log",           self._btn_clear,    "#374151"),
-        ]
-
-        self._buttons = {}
-        for label, cmd, colour in actions:
-            btn = tk.Button(
-                parent, text=label, command=cmd,
-                bg=colour, fg="white", font=FONT_BTN,
-                relief=tk.FLAT, pady=7, cursor="hand2",
-                activebackground=colour, activeforeground="white",
-            )
-            btn.pack(fill=tk.X, padx=10, pady=3)
-            self._buttons[label] = btn
-
-        ttk.Separator(parent, orient='horizontal').pack(fill=tk.X, padx=8, pady=8)
-
-        # Mini stats panel
-        tk.Label(parent, text="📈  Last Run Stats", font=FONT_H2,
-                 bg=PANEL, fg=FG).pack(fill=tk.X, padx=10)
-        self._stat_labels = {}
-        for key in ["Unsalted SR", "Salted SR", "Avg Time", "Tests ≥90%"]:
-            frm = tk.Frame(parent, bg=PANEL)
-            frm.pack(fill=tk.X, padx=12, pady=2)
-            tk.Label(frm, text=key + ":", font=("Segoe UI", 8),
-                     bg=PANEL, fg=FG_DIM, width=11, anchor='w').pack(side=tk.LEFT)
-            lbl = tk.Label(frm, text="—", font=("Segoe UI", 8, "bold"),
-                           bg=PANEL, fg=FG, anchor='e')
-            lbl.pack(side=tk.RIGHT)
-            self._stat_labels[key] = lbl
-
-    # ─────────────────────────────────────────────────────────────────────
-    def _build_log_panel(self, parent):
-        tk.Label(parent, text="📋  Output Log", font=FONT_H2,
-                 bg=PANEL, fg=FG, pady=6).pack(fill=tk.X, padx=10)
-
-        self._log = scrolledtext.ScrolledText(
-            parent, font=FONT_LOG, bg="#0f172a", fg=FG,
-            insertbackground=FG, relief=tk.FLAT,
-            wrap=tk.WORD, padx=8, pady=6,
-        )
-        self._log.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
-
-        # Colour tags
-        self._log.tag_config("head",    foreground="#a78bfa", font=(MONO, 10, "bold"))
-        self._log.tag_config("ok",      foreground=GREEN)
-        self._log.tag_config("warn",    foreground=YELLOW)
-        self._log.tag_config("err",     foreground=RED)
-        self._log.tag_config("info",    foreground="#7dd3fc")
-        self._log.tag_config("math",    foreground="#fb923c")
-        self._log.tag_config("dim",     foreground=FG_DIM)
-        self._log.tag_config("bold",    font=(MONO, 10, "bold"))
-        self._log.configure(state=tk.DISABLED)
-
-    # ══════════════════════════════════════════════════════════════════════
-    # LOGGING HELPERS
-    # ══════════════════════════════════════════════════════════════════════
-
-    def log(self, text: str, tag: str = ""):
-        self._log.configure(state=tk.NORMAL)
-        if tag:
-            self._log.insert(tk.END, text + "\n", tag)
+    def _toggle_fullscreen(self):
+        if self._is_fullscreen:
+            self.state("normal")
+            if hasattr(self, "_normal_geom"):
+                self.geometry(self._normal_geom)
+            self._is_fullscreen = False
         else:
-            self._log.insert(tk.END, text + "\n")
-        self._log.see(tk.END)
-        self._log.configure(state=tk.DISABLED)
+            self._normal_geom = self.geometry()
+            self.state("zoomed")
+            self._is_fullscreen = True
 
-    def _log_banner(self):
-        self.log("╔══════════════════════════════════════════════════════════╗", "head")
-        self.log("║   PASSWORD HASH ATTACK & PREVENTION — FINAL REVIEW      ║", "head")
-        self.log("║   Unsalted SHA-256 (Vulnerable)  vs  Salted SHA-256     ║", "head")
-        self.log("╚══════════════════════════════════════════════════════════╝", "head")
-        self.log("")
-        self.log("This tool demonstrates:", "info")
-        self.log("  • Rainbow-table precomputation attack on unsalted hashes", "info")
-        self.log("  • Why salting completely defeats precomputation", "info")
-        self.log("  • Mathematical work analysis: W = |D|·T_h  vs  N·|D|·T_h", "info")
-        self.log("")
-        self.log("→ Click 'Generate Parameters' to start.", "dim")
+    # ── Blinking block cursor ─────────────────────────────────────────────────
+    def _tick_cursor(self):
+        if hasattr(self, "_cur"):
+            self._cur.configure(text="█" if self._blink else " ")
+            self._blink = not self._blink
+        self.after(530, self._tick_cursor)
 
-    def _set_status(self, mode: str):
-        """mode: ready | running | vulnerable | secure"""
-        colours = {
-            "ready":      (FG_DIM,  "READY — Generate parameters to begin"),
-            "running":    (YELLOW,  "RUNNING — Please wait …"),
-            "vulnerable": (RED,     "● VULNERABLE — Unsalted system cracked!"),
-            "secure":     (GREEN,   "● SECURE — Salted system withstood attack!"),
-        }
-        col, msg = colours.get(mode, colours["ready"])
-        self._status_dot.configure(fg=col)
-        self._status_label.configure(text=msg, fg=col)
-        self._status = mode
+    # ══════════════════════════════════════════════════════════════════════════
+    def _build(self):
+        # ── Title bar ─────────────────────────────────────────────────────────
+        bar = ctk.CTkFrame(self, fg_color=PNL, corner_radius=0, height=50)
+        bar.pack(fill="x")
+        bar.bind("<ButtonPress-1>", self._press)
+        bar.bind("<B1-Motion>",     self._drag)
 
-    # ══════════════════════════════════════════════════════════════════════
-    # BUTTON ACTIONS
-    # ══════════════════════════════════════════════════════════════════════
-
-    # ── Generate ──────────────────────────────────────────────────────────
-    def _btn_generate(self):
-        self.log("")
-        self.log("══════════════════════════════════════════════════", "head")
-        self.log(" GENERATE PARAMETERS", "head")
-        self.log("══════════════════════════════════════════════════", "head")
-        n  = self.v_num_tests.get()
-        ds = self.v_dict_size.get()
-        nu = self.v_num_users.get()
-        rp = self.v_reuse.get()
-
-        self.log(f"  Num Tests        : {n}", "info")
-        self.log(f"  Dictionary Size  : {ds:,} words", "info")
-        self.log(f"  Users per Test   : {nu} (randomised 50–500)", "info")
-        self.log(f"  Reuse Probability: {rp:.0%}", "info")
-        self.log(f"  Salt Length      : 128 bits (16 bytes / user)", "info")
-        self.log(f"  Hash Algorithm   : SHA-256 (manual, 64-round)", "info")
-        self.log("")
-        self.log("  Salt space: 2¹²⁸ ≈ 3.4 × 10³⁸ possible salts", "math")
-        self.log("  Unsalted work  W  = |D| × T_h", "math")
-        self.log("  Salted   work  W' = N × |D| × T_h   (×N harder)", "math")
-        self.log("")
-        self.log("✔  Parameters set.  Click 'Run Attack' to execute.", "ok")
-        self._set_status("ready")
-
-    # ── Attack (unsalted) ─────────────────────────────────────────────────
-    def _btn_attack(self):
-        if self._status == "running":
-            return
-        self._stop_event.clear()
-        t = threading.Thread(target=self._run_attack_thread, daemon=True)
-        t.start()
-
-    def _run_attack_thread(self):
-        self.after(0, lambda: self._set_status("running"))
-        self.after(0, lambda: self._prog_var.set(0))
-        self.after(0, lambda: self.log(""))
-        self.after(0, lambda: self.log("══════════════════════════════════════════════════", "head"))
-        self.after(0, lambda: self.log(" ATTACK PHASE — Unsalted Rainbow Table", "head"))
-        self.after(0, lambda: self.log("══════════════════════════════════════════════════", "head"))
-
-        n_tests = self.v_num_tests.get()
-        ds_base = self.v_dict_size.get()
-
-        from database_generator import generate_dictionary, generate_users
-        from unsalted_system import hash_database
-        from attacker_unsalted import build_rainbow_table, crack_database
-
-        full_dict = generate_dictionary(ds_base)
-        all_sr    = []
-        all_times = []
-
-        for i in range(n_tests):
-            if self._stop_event.is_set():
-                break
-
-            n_users  = random.randint(50, 500)
-            rp       = round(random.uniform(0.5, self.v_reuse.get()), 2)
-            ds       = random.randint(len(full_dict) // 2, len(full_dict))
-            dct      = random.sample(full_dict, ds)
-            users    = generate_users(n_users, dct, rp)
-
-            hdb, freq     = hash_database(users)
-            rt, pre_t     = build_rainbow_table(dct)
-            cracked, lk_t = crack_database(hdb, rt)
-
-            sr    = calculate_success_rate(len(cracked), n_users)
-            total = pre_t + lk_t
-            all_sr.append(sr)
-            all_times.append(total)
-
-            tag  = "ok" if sr >= 90 else "warn"
-            msg  = (f"  Test {i+1:2d}: N={n_users:3d} |D|={ds:4d}  "
-                    f"Cracked={len(cracked):3d}/{n_users:3d}  "
-                    f"SR={sr:5.1f}%  t={total:.4f}s")
-            self.after(0, lambda m=msg, tg=tag: self.log(m, tg))
-
-            pct = ((i + 1) / n_tests) * 100
-            self.after(0, lambda p=pct: self._prog_var.set(p))
-
-        # Summary
-        if all_sr:
-            avg_sr   = sum(all_sr)  / len(all_sr)
-            avg_t    = sum(all_times) / len(all_times)
-            ge90     = sum(1 for r in all_sr if r >= 90)
-            self.after(0, lambda: self.log(""))
-            self.after(0, lambda: self.log(f"  Average Success Rate : {avg_sr:.1f}%", "err"))
-            self.after(0, lambda: self.log(f"  Tests ≥ 90%          : {ge90}/{len(all_sr)}", "err"))
-            self.after(0, lambda: self.log(f"  Average Attack Time  : {avg_t:.4f} s", "info"))
-            self.after(0, lambda: self.log(""))
-            self.after(0, lambda: self.log("  ⚠  VULNERABLE: Rainbow table attack succeeds!", "err"))
-            self.after(0, lambda: self._set_status("vulnerable"))
-            self.after(0, lambda: self._update_stats(avg_sr, None, avg_t, ge90, len(all_sr)))
-
-        self.after(0, lambda: self._prog_var.set(100))
-
-    # ── Prevention (salted) ───────────────────────────────────────────────
-    def _btn_prevent(self):
-        if self._status == "running":
-            return
-        self._stop_event.clear()
-        t = threading.Thread(target=self._run_full_comparison_thread, daemon=True)
-        t.start()
-
-    def _run_full_comparison_thread(self):
-        self.after(0, lambda: self._set_status("running"))
-        self.after(0, lambda: self._prog_var.set(0))
-        self.after(0, lambda: self.log(""))
-        self.after(0, lambda: self.log("══════════════════════════════════════════════════", "head"))
-        self.after(0, lambda: self.log(" PREVENTION PHASE — Salted SHA-256", "head"))
-        self.after(0, lambda: self.log("══════════════════════════════════════════════════", "head"))
-        self.after(0, lambda: self.log("  Running full comparison (unsalted vs salted)…", "info"))
-
-        n_tests = self.v_num_tests.get()
-        ds_base = self.v_dict_size.get()
-
-        def cb(tid, nu, ds, u_sr, s_sr, u_t):
-            u_tag = "err" if u_sr >= 90 else "warn"
-            s_tag = "ok"
-            msg = (f"  [{tid:2d}] N={nu:3d} |D|={ds:4d}  "
-                   f"Unsalted={u_sr:5.1f}%  Salted={s_sr:4.1f}%  "
-                   f"t={u_t:.4f}s")
-            self.after(0, lambda m=msg, ut=u_tag: self.log(m, ut))
-            pct = (tid / n_tests) * 100
-            self.after(0, lambda p=pct: self._prog_var.set(p))
-
-        results = run_comparison(
-            num_tests=n_tests,
-            dict_base_size=ds_base,
-            callback=cb,
-            stop_event=self._stop_event,
+        title = ctk.CTkLabel(
+            bar,
+            text="  P A S S W O R D   H A S H   A T T A C K   &   P R E V E N T I O N",
+            font=(MONO, 12, "bold"), text_color=WH, fg_color=PNL,
         )
-        self._results = results
-        s = results["summary"]
+        title.pack(side="left", padx=16, pady=14)
+        for w in (bar, title):
+            w.bind("<ButtonPress-1>", self._press)
+            w.bind("<B1-Motion>",     self._drag)
 
-        self.after(0, lambda: self.log(""))
-        self.after(0, lambda: self.log("  ── SUMMARY ──", "head"))
-        self.after(0, lambda: self.log(f"  Unsalted avg success  : {s['avg_unsalted_rate']:.1f}%", "err"))
-        self.after(0, lambda: self.log(f"  Salted   avg success  : {s['avg_salted_rate']:.1f}%", "ok"))
-        self.after(0, lambda: self.log(f"  Tests ≥90% (unsalted) : {s['tests_ge90_unsalted']}/{n_tests}", "info"))
-        self.after(0, lambda: self.log(f"  Avg security improve  : {s['avg_security_improvement']:.1f} pp", "ok"))
-        self.after(0, lambda: self.log(""))
-        self.after(0, lambda: self._log_math_section(results))
-        self.after(0, lambda: self.log(""))
-        self.after(0, lambda: self.log("  ✔  SECURE: Salting defeats the rainbow table!", "ok"))
-        self.after(0, lambda: self._set_status("secure"))
-        self.after(0, lambda: self._update_stats(
-            s["avg_unsalted_rate"], s["avg_salted_rate"],
-            s["avg_unsalted_time"], s["tests_ge90_unsalted"], n_tests
-        ))
-        self.after(0, lambda: self._prog_var.set(100))
+        self._cur = ctk.CTkLabel(bar, text="█", font=(MONO, 15, "bold"),
+                                 text_color=GRN, fg_color=PNL)
+        self._cur.pack(side="left", padx=2)
 
-    def _log_math_section(self, results):
-        self.log("  ── MATHEMATICAL VALIDATION ──", "head")
-        u = results["unsalted"]
-        for r in u[:5]:
-            ds  = r["dict_size"]
-            ht  = r["hash_time"]
-            pred = r["predicted_W"]
-            act  = r["precompute_time"]
-            self.log(f"  Test {r['test_id']}: |D|={ds}  T_h={ht:.6f}s", "math")
-            self.log(f"    Predicted W = |D|×T_h = {pred:.5f}s  |  Actual = {act:.5f}s", "math")
-        self.log("")
-        self.log("  Salted work multiplier (sample):", "math")
-        for r in results["salted"][:3]:
-            n   = r["num_users"]
-            ds  = r["dict_size"]
-            sw  = r["salted_W_estimate"]
-            self.log(f"    N={n} |D|={ds}  W'=N×|D|×T_h ≈ {sw:.4f}s  (×{n} vs unsalted)", "math")
+        for sym, cmd in [("×", self.destroy), ("◻", self._toggle_fullscreen), ("−", self._minimize)]:
+            ctk.CTkButton(
+                bar, text=sym, width=38, height=38,
+                fg_color=BK, border_width=1, border_color=DIM,
+                hover_color=WH, text_color=WH,
+                font=(MONO, 13, "bold"), corner_radius=0, command=cmd,
+            ).pack(side="right", padx=2, pady=6)
 
-    # ── Graphs ────────────────────────────────────────────────────────────
-    def _btn_graphs(self):
-        if self._results is None:
-            messagebox.showinfo("No Data", "Run 'Apply Prevention' first to generate results.")
+        _line(self)  # 1-px divider
+
+        # ── Body ──────────────────────────────────────────────────────────────
+        body = tk.Frame(self, bg=BK)
+        body.pack(fill="both", expand=True)
+
+        # Left sidebar (fixed width)
+        left = tk.Frame(body, bg=PNL, width=224)
+        left.pack(side="left", fill="y")
+        left.pack_propagate(False)
+        self._sidebar(left)
+
+        # 1-px vertical rule
+        tk.Frame(body, bg=DIM, width=1).pack(side="left", fill="y")
+
+        # Log area
+        right = tk.Frame(body, bg=BK)
+        right.pack(side="left", fill="both", expand=True)
+        self._log_panel(right)
+
+        # ── Status bar ────────────────────────────────────────────────────────
+        _line(self)
+        bot = tk.Frame(self, bg=PNL, height=34)
+        bot.pack(fill="x")
+
+        self._sdot = ctk.CTkLabel(bot, text="●", font=(MONO, 13),
+                                  text_color=MID, fg_color=PNL)
+        self._sdot.pack(side="left", padx=(14, 4))
+
+        self._slbl = ctk.CTkLabel(bot, text="IDLE", font=(MONO, 9),
+                                  text_color=MID, fg_color=PNL)
+        self._slbl.pack(side="left")
+
+        self._pv = ctk.DoubleVar(value=0)
+        self._pb = ctk.CTkProgressBar(
+            bot, variable=self._pv, width=200, height=5,
+            fg_color=DIM, progress_color=WH, corner_radius=0,
+        )
+        self._pb.pack(side="right", padx=14, pady=14)
+
+    # ── Sidebar ───────────────────────────────────────────────────────────────
+    def _sidebar(self, p):
+        def slbl(text, small=False):
+            sz = 8 if small else 9
+            ctk.CTkLabel(p, text=text, font=(MONO, sz), text_color=MID,
+                         fg_color=PNL, anchor="w").pack(fill="x", padx=18, pady=(10, 2))
+
+        slbl("S E T T I N G S")
+        _line(p)
+
+        self.vt = ctk.IntVar(value=25)
+        self.vd = ctk.IntVar(value=2000)
+        self.vk = ctk.IntVar(value=10)
+        self.vr = ctk.DoubleVar(value=0.70)
+
+        for label, var in [
+            ("num tests",  self.vt),
+            ("dict size",  self.vd),
+            ("stretch K",  self.vk),
+            ("reuse prob", self.vr),
+        ]:
+            slbl(label, small=True)
+            e = ctk.CTkEntry(p, textvariable=var, width=184, height=30,
+                             fg_color=BK, border_color=DIM, border_width=1,
+                             text_color=WH, font=(MONO, 10), corner_radius=0)
+            e.pack(padx=18, pady=(0, 8))
+            e.bind("<FocusIn>",  lambda ev, w=e: w.configure(border_color=GRN))
+            e.bind("<FocusOut>", lambda ev, w=e: w.configure(border_color=DIM))
+
+        _line(p)
+        slbl("A C T I O N S")
+
+        self._btns = {}
+        for label, cmd in [
+            ("generate parameters", self._gen),
+            ("run attack",          self._attack),
+            ("apply prevention",    self._prevent),
+            ("show graphs",         self._graphs),
+            ("export csv",          self._export),
+            ("clear log",           self._clear),
+        ]:
+            b = ctk.CTkButton(
+                p, text=label.upper(), command=cmd,
+                width=184, height=34, corner_radius=0,
+                fg_color=BK, border_width=1, border_color=WH,
+                hover_color=WH, text_color=WH,
+                font=(MONO, 9, "bold"),
+            )
+            b.pack(padx=18, pady=3)
+            self._btns[label] = b
+
+        _line(p)
+        slbl("S T A T S")
+
+        self._sv = {}
+        for k, col in [("unsalted", RED), ("salted", GRN),
+                       ("stretched", GRN), ("peppered", GRN)]:
+            frm = tk.Frame(p, bg=PNL)
+            frm.pack(fill="x", padx=18, pady=2)
+            tk.Label(frm, text=k, font=(MONO, 8), fg=MID, bg=PNL,
+                     anchor="w").pack(side="left")
+            lbl = tk.Label(frm, text="—", font=(MONO, 8, "bold"),
+                           fg=col, bg=PNL, anchor="e")
+            lbl.pack(side="right")
+            self._sv[k] = lbl
+
+    # ── Log panel ─────────────────────────────────────────────────────────────
+    def _log_panel(self, p):
+        hdr = tk.Frame(p, bg=BK, height=32)
+        hdr.pack(fill="x")
+        tk.Label(hdr, text="  O U T P U T   L O G",
+                 font=(MONO, 9), fg=MID, bg=BK).pack(side="left", pady=8)
+        _line(p)
+
+        self._txt = tk.Text(
+            p, bg=BK, fg=WH, insertbackground=GRN,
+            font=(MONO, 10), wrap="word",
+            relief="flat", borderwidth=0, padx=20, pady=12,
+            state="disabled",
+        )
+        sb = tk.Scrollbar(p, orient="vertical", command=self._txt.yview,
+                          width=6, troughcolor=BK, bg=DIM, activebackground=WH)
+        self._txt.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        self._txt.pack(fill="both", expand=True)
+
+        self._txt.tag_config("head", foreground="#a78bfa", font=(MONO, 10, "bold"))
+        self._txt.tag_config("math", foreground="#fb923c")
+        self._txt.tag_config("ok",   foreground=GRN)
+        self._txt.tag_config("err",  foreground=RED)
+        self._txt.tag_config("warn", foreground="#f59e0b")
+        self._txt.tag_config("info", foreground="#7dd3fc")
+        self._txt.tag_config("dim",  foreground=MID)
+
+        self._banner()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # LOGGING HELPERS
+    # ══════════════════════════════════════════════════════════════════════════
+    def log(self, text: str, tag: str = ""):
+        self._txt.configure(state="normal")
+        self._txt.insert("end", text + "\n", tag if tag else ())
+        self._txt.see("end")
+        self._txt.configure(state="disabled")
+
+    def _banner(self):
+        self.log("  ╔══════════════════════════════════════════════════════╗", "head")
+        self.log("  ║  PASSWORD HASH ATTACK & PREVENTION — FINAL REVIEW   ║", "head")
+        self.log("  ║  Unsalted · Salted · Key-Stretched · Salt+Pepper    ║", "head")
+        self.log("  ╚══════════════════════════════════════════════════════╝", "head")
+        self.log("", "")
+        self.log("  W O R K   C O M P L E X I T Y", "head")
+        self.log("  Unsalted  :  W = |D| × T_h", "math")
+        self.log("  Salted    :  W = N × |D| × T_h          (×N harder)", "math")
+        self.log("  Stretched :  W = N × |D| × K × T_h      (×N·K harder)", "math")
+        self.log("  Peppered  :  W = 2²⁵⁶ × N × |D| × T_h  (≈ impossible)", "math")
+        self.log("", "")
+        self.log("  ─── click  GENERATE PARAMETERS  to begin ───", "dim")
+
+    def _setstatus(self, text, col=WH):
+        self._slbl.configure(text=text, text_color=col)
+        self._sdot.configure(text_color=col)
+
+    def _setprog(self, pct):
+        self._pv.set(pct)
+        self._pb.configure(progress_color=GRN if pct >= 100 else WH)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # BUTTON HELPERS
+    # ══════════════════════════════════════════════════════════════════════════
+    def _set_busy(self, busy: bool):
+        state = "disabled" if busy else "normal"
+        for b in self._btns.values():
+            b.configure(state=state)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # BUTTON HANDLERS
+    # ══════════════════════════════════════════════════════════════════════════
+    def _gen(self):
+        self.log("", "")
+        self.log("  G E N E R A T E   P A R A M E T E R S", "head")
+        self.log("  " + "─" * 50, "dim")
+        K = self.vk.get()
+        self.log(f"  num tests        : {self.vt.get()}", "info")
+        self.log(f"  dictionary size  : {self.vd.get():,} words", "info")
+        self.log(f"  reuse probability: {self.vr.get():.0%}", "info")
+        self.log(f"  stretch K        : {K:,} iterations", "info")
+        self.log(f"  salt space       : 2¹²⁸ ≈ 3.4 × 10³⁸ salts", "info")
+        self.log(f"  pepper space     : 2²⁵⁶ ≈ 1.2 × 10⁷⁷ keys", "info")
+        self.log("", "")
+        self.log("  M A T H   P R O O F", "head")
+        self.log("  Unsalted  :  W = |D| × T_h", "math")
+        self.log("  Salted    :  W = N × |D| × T_h              [×N]", "math")
+        self.log(f"  Stretched :  W = N × |D| × {K:,} × T_h   [×N×{K:,}]", "math")
+        self.log("  Peppered  :  W = 2²⁵⁶ × N × |D| × T_h     [×2²⁵⁶]", "math")
+        self.log("", "")
+        self.log("  ─── ready ───", "ok")
+        self._setstatus("READY", WH)
+
+    # ── Attack (unsalted only, fast demo) ─────────────────────────────────────
+    def _attack(self):
+        n = self.vt.get()
+        d = self.vd.get()
+        r = self.vr.get()
+        self._set_busy(True)
+        threading.Thread(target=self._attack_th, args=(n, d, r), daemon=True).start()
+
+    def _attack_th(self, n, dict_size, reuse_prob):
+        from database_generator import generate_dictionary, generate_users
+        from hash_systems import hash_database
+        from attackers import build_rainbow_table, crack_database
+
+        try:
+            self.after(0, lambda: self._setstatus("RUNNING ATTACK …", RED))
+            self.after(0, lambda: self.log("", ""))
+            self.after(0, lambda: self.log("  A T T A C K   P H A S E", "head"))
+            self.after(0, lambda: self.log("  rainbow table precomputation on unsalted SHA-256", "dim"))
+            self.after(0, lambda: self.log("  " + "─" * 50, "dim"))
+
+            fd = generate_dictionary(dict_size)
+            srs = []
+
+            for i in range(n):
+                nu  = random.randint(50, 500)
+                ds  = random.randint(len(fd)//2, len(fd))
+                dct = random.sample(fd, ds)
+                u   = generate_users(nu, dct, reuse_prob)
+                hdb, freq = hash_database(u)
+                rt, pre_t = build_rainbow_table(dct)
+                cr, lk    = crack_database(hdb, rt)
+                T_h = pre_t / ds
+                W_u = ds * T_h
+                sr  = calculate_success_rate(len(cr), nu)
+                srs.append(sr)
+                tag = "err" if sr >= 90 else "warn"
+                msg = (f"  [{i+1:02d}]  N={nu:3d}  |D|={ds:4d}  "
+                       f"W=|{ds:,}|×{T_h:.7f}={W_u:.5f}s  "
+                       f"cracked={len(cr)}/{nu}  SR={sr:.1f}%")
+                self.after(0, lambda m=msg, t=tag: self.log(m, t))
+                self.after(0, lambda p=(i+1)/n*100: self._setprog(p))
+
+            avg = sum(srs)/len(srs)
+            ge90 = sum(1 for s in srs if s >= 90)
+            self.after(0, lambda: self.log("", ""))
+            self.after(0, lambda: self.log(f"  avg success : {avg:.1f}%   tests≥90%: {ge90}/{n}", "err"))
+            self.after(0, lambda: self.log("  ⚠  VULNERABLE — precomputed table cracks all users", "err"))
+            self.after(0, lambda: self._setstatus("● VULNERABLE", RED))
+            self.after(0, lambda: self._sv["unsalted"].configure(text=f"{avg:.1f}%", fg=RED))
+        finally:
+            self.after(0, lambda: self._set_busy(False))
+
+    # ── Prevention (full 4-way) ───────────────────────────────────────────────
+    def _prevent(self):
+        n = self.vt.get()
+        d = self.vd.get()
+        k = self.vk.get()
+        self._stop.clear()
+        self._set_busy(True)
+        threading.Thread(target=self._prevent_th, args=(n, d, k), daemon=True).start()
+
+    def _prevent_th(self, n, dict_size, k_iter):
+        try:
+            self.after(0, lambda: self._setstatus("COMPARING …", "#f59e0b"))
+
+            def lcb(msg, tag):
+                self.after(0, lambda m=msg, t=tag: self.log(m, t))
+
+            def pcb(pct):
+                self.after(0, lambda p=pct: self._setprog(p))
+
+            res = run_full_comparison(
+                num_tests=n,
+                dict_base_size=dict_size,
+                k_iter=k_iter,
+                log_cb=lcb,
+                progress_cb=pcb,
+                stop_event=self._stop,
+            )
+            self._results = res
+            s = res["summary"]
+            self.after(0, lambda: self._setstatus("● SECURE", GRN))
+            self.after(0, lambda: self._sv["unsalted"].configure(text=f"{s['avg_unsalted_sr']:.1f}%",   fg=RED))
+            self.after(0, lambda: self._sv["salted"].configure(text=f"{s['avg_salted_sr']:.1f}%",       fg=GRN))
+            self.after(0, lambda: self._sv["stretched"].configure(text=f"{s['avg_stretched_sr']:.1f}%", fg=GRN))
+            self.after(0, lambda: self._sv["peppered"].configure(text=f"{s['avg_peppered_sr']:.1f}%",   fg=GRN))
+        finally:
+            self.after(0, lambda: self._set_busy(False))
+
+    def _graphs(self):
+        if not self._results:
+            messagebox.showinfo("no data", "run 'apply prevention' first")
             return
-        self._open_graph_window()
 
-    def _open_graph_window(self):
-        win = tk.Toplevel(self)
-        win.title("📊  Graphs & Comparative Analysis")
-        win.geometry("1050x700")
-        win.configure(bg=BG)
+        win = ctk.CTkToplevel(self)
+        win.title("graphs")
+        win.geometry("1080x700")
+        win.configure(fg_color=BK)
+        win.after(100, win.focus_force)
 
-        self.log("Generating graphs…", "info")
+        from graph_generator import generate_all_graphs
         figs = generate_all_graphs(self._results)
-        self._graph_figs = figs
 
-        titles = [
-            "1 · Before vs After Success Rate",
-            "2 · Time vs Dictionary Size",
-            "3 · CIA Security Properties",
-            "4 · Attack vs Prevention Latency",
-            "5 · Security Improvement %",
-            "6 · Hash Clustering & Reuse",
-        ]
+        style = ttk.Style(win)
+        style.theme_use("clam")
+        style.configure("TNotebook",      background=BK, borderwidth=0)
+        style.configure("TNotebook.Tab",  background=PNL, foreground=WH,
+                        font=(MONO, 9), padding=[10, 4])
+        style.map("TNotebook.Tab",
+                  background=[("selected", DIM)],
+                  foreground=[("selected", WH)])
 
-        # Tabs
         nb = ttk.Notebook(win)
-        nb.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
+        nb.pack(fill="both", expand=True, padx=4, pady=4)
 
-        for fig, title in zip(figs, titles):
-            frame = ttk.Frame(nb)
-            nb.add(frame, text=title)
+        tabs = ["1 · success rate", "2 · work formula", "3 · CIA",
+                "4 · latency", "5 · improvement", "6 · complexity"]
 
-            canvas = FigureCanvasTkAgg(fig, master=frame)
-            canvas.draw()
-            canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        for fig, tab in zip(figs, tabs):
+            f = tk.Frame(nb, bg=BK)
+            nb.add(f, text=tab)
+            cv = FigureCanvasTkAgg(fig, master=f)
+            cv.draw()
+            tb = NavigationToolbar2Tk(cv, f)
+            tb.configure(background=PNL)
+            tb.update()
+            cv.get_tk_widget().pack(fill="both", expand=True)
 
-            toolbar = NavigationToolbar2Tk(canvas, frame)
-            toolbar.update()
+        self.log(f"  ✔  {len(figs)} graphs ready", "ok")
 
-        self.log(f"✔  {len(figs)} graphs generated.", "ok")
-
-    # ── Export CSV ────────────────────────────────────────────────────────
-    def _btn_export(self):
-        if self._results is None:
-            messagebox.showinfo("No Data", "Run experiments first.")
+    def _export(self):
+        if not self._results:
+            messagebox.showinfo("no data", "run experiments first")
             return
         path = filedialog.asksaveasfilename(
             defaultextension=".csv",
-            filetypes=[("CSV files", "*.csv"), ("All", "*.*")],
-            initialfile="results_comparison.csv",
+            filetypes=[("CSV", "*.csv")],
+            initialfile="comparison_results.csv",
         )
         if not path:
             return
-
-        u = self._results["unsalted"]
-        s = self._results["salted"]
-        rows = []
-        for ur, sr in zip(u, s):
-            rows.append({
-                "test_id":          ur["test_id"],
-                "num_users":        ur["num_users"],
-                "dict_size":        ur["dict_size"],
-                "reuse_prob":       ur["reuse_prob"],
-                "unsalted_cracked": ur["cracked"],
-                "unsalted_sr_%":    round(ur["success_rate"], 2),
-                "unsalted_time_s":  round(ur["attack_time"], 6),
-                "salted_cracked":   sr["cracked"],
-                "salted_sr_%":      round(sr["success_rate"], 2),
-                "salted_time_s":    round(sr["attack_time"], 6),
-                "security_improve": round(ur["success_rate"] - sr["success_rate"], 2),
-            })
-
+        u, s, st, p = (self._results[k] for k in ["unsalted","salted","stretched","peppered"])
+        rows = [{
+            "test_id": ur["test_id"], "num_users": ur["num_users"],
+            "dict_size": ur["dict_size"],
+            "unsalted_sr_%":   round(ur["success_rate"],  2),
+            "salted_sr_%":     round(sr["success_rate"],  2),
+            "stretched_sr_%":  round(str_["success_rate"],2),
+            "peppered_sr_%":   round(pr["success_rate"],  2),
+            "unsalted_time_s": round(ur["attack_time"],   6),
+        } for ur, sr, str_, pr in zip(u, s, st, p)]
         with open(path, "w", newline="") as f:
-            writer = csv.DictWriter(f, fieldnames=rows[0].keys())
-            writer.writeheader()
-            writer.writerows(rows)
+            w = csv.DictWriter(f, fieldnames=rows[0].keys())
+            w.writeheader(); w.writerows(rows)
+        self.log(f"  ✔  {len(rows)} rows → {path}", "ok")
 
-        self.log(f"✔  Exported {len(rows)} rows → {path}", "ok")
-        messagebox.showinfo("Exported", f"Results saved to:\n{path}")
-
-    # ── Clear ─────────────────────────────────────────────────────────────
-    def _btn_clear(self):
-        self._log.configure(state=tk.NORMAL)
-        self._log.delete("1.0", tk.END)
-        self._log.configure(state=tk.DISABLED)
-        self._log_banner()
-        self._set_status("ready")
-
-    # ── Stats panel helper ─────────────────────────────────────────────────
-    def _update_stats(self, u_sr, s_sr, avg_t, ge90, total):
-        self._stat_labels["Unsalted SR"].configure(
-            text=f"{u_sr:.1f}%", fg=RED if u_sr >= 90 else YELLOW
-        )
-        if s_sr is not None:
-            self._stat_labels["Salted SR"].configure(
-                text=f"{s_sr:.1f}%", fg=GREEN
-            )
-        self._stat_labels["Avg Time"].configure(
-            text=f"{avg_t:.4f}s", fg=FG
-        )
-        self._stat_labels["Tests ≥90%"].configure(
-            text=f"{ge90}/{total}", fg=RED if ge90 > total * 0.5 else GREEN
-        )
+    def _clear(self):
+        self._txt.configure(state="normal")
+        self._txt.delete("1.0", "end")
+        self._txt.configure(state="disabled")
+        self._banner()
+        self._setstatus("IDLE", MID)
+        self._setprog(0)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Helpers ───────────────────────────────────────────────────────────────────
+def _line(parent):
+    """1-pixel separator line."""
+    tk.Frame(parent, bg=DIM, height=1).pack(fill="x")
+
+
 def main():
     app = App()
     app.mainloop()
