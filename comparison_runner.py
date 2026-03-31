@@ -26,6 +26,7 @@ def run_full_comparison(
     log_cb=None,
     progress_cb=None,
     stop_event=None,
+    test_cb=None,           # called after each test: (u_sr, s_sr, st_sr, p_sr)
 ) -> dict:
 
     def log(msg, tag=""):
@@ -71,6 +72,14 @@ def run_full_comparison(
         log(f"  ║  [UNSALTED]   W = {dict_size:,} × {T_h:.8f} = {W_u:.6f}s"
             f"   SR={u_sr:.0f}%  ⚠", "err")
 
+        # feature 4 — entropy / clustering
+        dup_groups = {h: c for h, c in freq.items() if c > 1}
+        if dup_groups:
+            worst_h, worst_c = max(dup_groups.items(), key=lambda x: x[1])
+            log(f"  ║  ⚑ {len(dup_groups)} shared hashes — worst: {worst_c} accounts"
+                f" share {worst_h[:16]}…", "warn")
+            log(f"  ║    cracking that ONE hash instantly exposes {worst_c} accounts", "warn")
+
         # ── Salted ────────────────────────────────────────────────────
         sdb = hash_database_salted(users)
         cracked_s, lk_s = attempt_rainbow_on_salted(sdb, rt)
@@ -86,6 +95,12 @@ def run_full_comparison(
         W_st  = num_users * dict_size * k_iter * T_h
         log(f"  ║  [STRETCHED]  W = {num_users}×{dict_size:,}×{k_iter:,}×T_h = {W_st:.2f}s  (×{num_users*k_iter:,})"
             f"   SR={st_sr:.0f}%  ✔", "ok")
+
+        # feature 5 — login cost vs attack cost
+        login_ms       = k_iter * T_h * 1000
+        attack_per_usr = k_iter * dict_size * T_h
+        log(f"  ║    ⟳ defender login  : {login_ms:.1f} ms/user  (K={k_iter:,}×T_h)", "math")
+        log(f"  ║    ⚔ attacker/user   : {attack_per_usr:.3f} s  (K×|D|×T_h)  — impractical", "math")
 
         # ── Peppered ──────────────────────────────────────────────────
         pdb = hash_database_peppered(users, pepper=pepper)
@@ -121,6 +136,8 @@ def run_full_comparison(
             "work_years": W_p_yr,
         })
 
+        if test_cb:
+            test_cb(u_sr, s_sr, st_sr, p_sr)
         if progress_cb:
             progress_cb((i + 1) / num_tests * 100)
 
@@ -164,4 +181,19 @@ def _log_final(log, s):
     log(f"  Unsalted tests ≥90%: {s['tests_ge90']}/{s['num_tests']}", "err")
     log(f"  Stretching overhead: K={s['K_iterations']:,}× per password guess", "math")
     log(f"  Pepper key space: 2²⁵⁶ ≈ 10⁷⁷  (offline attack: impossible)", "math")
+    log("", "")
+    # feature 3 — recommendation block
+    log("  ╔══════════════════════════════════════════════════════╗", "head")
+    log("  ║        R E C O M M E N D A T I O N                 ║", "head")
+    log("  ╚══════════════════════════════════════════════════════╝", "head")
+    log("  All three defences → 0 % attacker success rate.", "ok")
+    log("  Production deployment — use all three layers together:", "info")
+    log("", "")
+    log("  ① Salt every password  — eliminates rainbow table reuse entirely", "ok")
+    log(f"  ② Key stretching K≥10k — {s['K_iterations']:,}× attacker cost, imperceptible login delay", "ok")
+    log("  ③ Pepper (server-side) — 2²⁵⁶× factor if only the DB is stolen", "ok")
+    log("  ④ Use Argon2id/bcrypt  — memory-hard, industry standard for production", "warn")
+    log("", "")
+    log(f"  WINNER (this demo):  Peppered  — W = 2²⁵⁶ × N × |D| × T_h ≈ 10⁷⁷ years", "ok")
+    log("  Minimum viable now:  bcrypt + unique salt — NEVER plain SHA-256", "warn")
     log("", "")
