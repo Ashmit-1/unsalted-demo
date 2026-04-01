@@ -607,6 +607,7 @@ class App(ctk.CTk):
         from database_generator import generate_dictionary
         from attackers import build_rainbow_table
         from preventions import hash_password_stretched, hash_password_peppered, get_server_pepper
+        import random as _rng
 
         # Build a real dictionary that includes the typed password
         base_dict = generate_dictionary(60)
@@ -616,50 +617,50 @@ class App(ctk.CTk):
         rt, build_t = build_rainbow_table(base_dict)
 
         # Real lookups
-        h_u           = _sha256(pw)
-        in_table      = h_u in rt          # True — we inserted pw into dict
-        salt          = _gen_salt()
-        h_s           = _sha256(salt + pw)
-        salt_in_table = h_s in rt          # False — salt not in table
+        h_u    = _sha256(pw)
+        salt   = _gen_salt()
+        h_s    = _sha256(salt + pw)
 
-        # Stretched: salt + K iterations
+        # Stretched
         K = self._k_val
         salt_st, h_st, iters = hash_password_stretched(pw, iterations=K)
-        st_in_table = h_st in rt           # False
 
-        # Peppered: pepper + salt + pw
-        pepper    = get_server_pepper()
+        # Peppered
+        pepper   = get_server_pepper()
         salt_p, h_p = hash_password_peppered(pw)
-        p_in_table  = h_p in rt            # False
 
-        # Pick 5 sample entries for the "scrolling table" reveal
-        import random as _rng
+        # 5 sample table entries (not the target)
         sample_pairs = _rng.sample(
             [(w, h) for h, w in rt.items() if w != pw], min(5, len(rt) - 1)
         )
 
         # ── Open demo popup ──────────────────────────────────────────────
-        # Use tk.Toplevel (not CTkToplevel) so Windows treats it as an
-        # independent top-level window; CTkToplevel under overrideredirect
-        # parents can silently hide behind the main window.
         win = tk.Toplevel()
         win.title("LIVE ATTACK DEMO")
         win.configure(bg=BK)
-        win.geometry("900x600")
+        win.geometry("960x680")
         win.resizable(True, True)
         win.attributes("-topmost", True)
         win.after(150, lambda: win.attributes("-topmost", False))
         win.lift()
         win.focus_force()
 
-        hdr = ctk.CTkLabel(
-            win,
-            text=f"  L I V E   A T T A C K   D E M O   —   password: \"{pw}\"",
+        # ── Header ───────────────────────────────────────────────────────
+        hdr_frame = tk.Frame(win, bg=PNL)
+        hdr_frame.pack(fill="x")
+        ctk.CTkLabel(
+            hdr_frame,
+            text=f"  L I V E   A T T A C K   D E M O   —   target password: \"{pw}\"",
             font=(MONO, 12, "bold"), text_color=WH, fg_color=PNL,
+        ).pack(side="left", fill="x", expand=True)
+        phase_lbl = ctk.CTkLabel(
+            hdr_frame, text="  PHASE 1 / 6  ",
+            font=(MONO, 10, "bold"), text_color=AMB, fg_color=PNL,
         )
-        hdr.pack(fill="x")
+        phase_lbl.pack(side="right")
         tk.Frame(win, bg=DIM, height=1).pack(fill="x")
 
+        # ── Text area ────────────────────────────────────────────────────
         sb  = tk.Scrollbar(win, orient="vertical", width=6,
                            troughcolor=BK, bg=DIM, activebackground=WH)
         txt = tk.Text(
@@ -671,130 +672,343 @@ class App(ctk.CTk):
         sb.pack(side="right", fill="y")
         txt.pack(fill="both", expand=True)
 
-        txt.tag_config("head",  foreground="#a78bfa", font=(MONO, 10, "bold"))
-        txt.tag_config("dim",   foreground=MID)
-        txt.tag_config("hash",  foreground=AMB)
-        txt.tag_config("crack", foreground=RED, font=(MONO, 12, "bold"))
-        txt.tag_config("safe",  foreground=GRN, font=(MONO, 12, "bold"))
-        txt.tag_config("ok",    foreground=GRN)
-        txt.tag_config("err",   foreground=RED)
-        txt.tag_config("info",  foreground=BLU)
-        txt.tag_config("tbl",   foreground="#555599")
-        txt.tag_config("hit",   foreground=RED, font=(MONO, 10, "bold"))
+        txt.tag_config("head",   foreground="#a78bfa", font=(MONO, 10, "bold"))
+        txt.tag_config("dim",    foreground=MID)
+        txt.tag_config("hash",   foreground=AMB)
+        txt.tag_config("crack",  foreground=RED, font=(MONO, 13, "bold"))
+        txt.tag_config("safe",   foreground=GRN, font=(MONO, 13, "bold"))
+        txt.tag_config("ok",     foreground=GRN)
+        txt.tag_config("err",    foreground=RED)
+        txt.tag_config("info",   foreground=BLU)
+        txt.tag_config("tbl",    foreground="#555599")
+        txt.tag_config("hit",    foreground=RED, font=(MONO, 11, "bold"))
+        txt.tag_config("salt",   foreground="#f472b6", font=(MONO, 10, "bold"))
+        txt.tag_config("pepper", foreground="#c084fc", font=(MONO, 10, "bold"))
+        txt.tag_config("prompt", foreground=AMB, font=(MONO, 9, "italic"))
+        txt.tag_config("sep",    foreground=DIM)
 
+        # ── Footer controls ───────────────────────────────────────────────
         tk.Frame(win, bg=DIM, height=1).pack(fill="x")
+        foot = tk.Frame(win, bg=BK)
+        foot.pack(fill="x", pady=4)
+
+        next_btn = ctk.CTkButton(
+            foot, text="NEXT PHASE  →", command=lambda: advance(),
+            width=160, height=30, corner_radius=0,
+            fg_color=AMB, hover_color=WH, text_color=BK, font=(MONO, 9, "bold"),
+        )
+        next_btn.pack(side="left", padx=12)
+
         ctk.CTkButton(
-            win, text="CLOSE", command=win.destroy,
-            width=120, height=28, corner_radius=0,
+            foot, text="CLOSE", command=win.destroy,
+            width=100, height=30, corner_radius=0,
             fg_color=BK, border_width=1, border_color=DIM,
             hover_color=WH, text_color=WH, font=(MONO, 8, "bold"),
-        ).pack(pady=6)
+        ).pack(side="right", padx=12)
 
+        hint_lbl = ctk.CTkLabel(
+            foot, text="press  ENTER  or click  NEXT PHASE →  to continue",
+            font=(MONO, 8), text_color=MID, fg_color=BK,
+        )
+        hint_lbl.pack(side="left")
+
+        # ── Helpers ───────────────────────────────────────────────────────
         def w(text, tag=""):
             txt.configure(state="normal")
             txt.insert("end", text + "\n", tag if tag else ())
             txt.see("end")
             txt.configure(state="disabled")
 
-        # Accumulating delay — each call schedules from the last
-        ms = [0]
+        def w_inline(text, tag=""):
+            """Insert without newline."""
+            txt.configure(state="normal")
+            txt.insert("end", text, tag if tag else ())
+            txt.see("end")
+            txt.configure(state="disabled")
 
+        ms = [0]
         def later(dt, text, tag=""):
             ms[0] += dt
             win.after(ms[0], lambda t=text, g=tag: w(t, g))
 
-        # ── Phase 1: build table ──────────────────────────────────────────
-        later(0,   "  ┌─ PHASE 1 · BUILD THE RAINBOW TABLE ────────────────────────────┐", "head")
-        later(20,  f"  │  dictionary  : {len(base_dict):,} common passwords  (includes target)", "info")
-        later(20,  f"  │  computing sha256 for every word…", "dim")
-        later(320, f"  │  built in     : {build_t*1000:.1f} ms   ({len(rt):,} entries in memory)", "info")
-        later(20,  f"  │  lookup cost  : O(1)  — hash → plaintext, instant retrieval", "dim")
-        later(20,  "  └────────────────────────────────────────────────────────────────┘", "head")
-        later(20,  "", "")
+        def type_anim(base_text, reveal, tag, delay_each=60):
+            """Animate revealing `reveal` char by char after base_text."""
+            ms[0] += 40
+            start = ms[0]
+            win.after(start, lambda: w_inline(base_text, tag))
+            for i, ch in enumerate(reveal):
+                ms[0] += delay_each
+                win.after(ms[0], lambda c=ch, tg=tag: w_inline(c, tg))
+            ms[0] += 40
+            win.after(ms[0], lambda: w("", ""))  # newline after
 
-        # ── Phase 2: unsalted attack ──────────────────────────────────────
-        later(180, "  ┌─ PHASE 2 · ATTACK — UNSALTED DATABASE ────────────────────────┐", "head")
-        later(20,  f"  │  victim stored :  sha256(\"{pw}\")", "dim")
-        later(20,  f"  │  stored hash   :  {h_u}", "hash")
-        later(20,  "  │", "dim")
-        later(20,  "  │  sample of pre-built table entries:", "dim")
-        for word, h in sample_pairs:
-            later(80, f"  │    {h}  →  \"{word}\"", "tbl")
-        later(120, f"  │    …", "tbl")
-        later(20,  "  │", "dim")
-        later(20,  "  │  querying table with stored hash…", "dim")
-        later(360, f"  │  table[ {h_u[:24]}… ]", "dim")
-        later(20,  f"  │         ↓", "err")
-        later(160, f"  │       \"{pw}\"", "hit")
-        later(20,  "  │", "dim")
-        later(20,  f"  │  ██  C R A C K E D  ██  →  \"{pw}\"  in < 1 ms  (one dict lookup)", "crack")
-        later(20,  "  │  table built once · reused against every account in the database", "err")
-        later(20,  "  └────────────────────────────────────────────────────────────────┘", "head")
-        later(20,  "", "")
+        def scan_anim(hash_str, found, tag_scan="dim", delay_each=18):
+            """Simulate scanning the table entry by entry."""
+            chars = list(hash_str[:48])
+            ms[0] += 60
+            win.after(ms[0], lambda: w_inline("  │    scanning → ", "dim"))
+            for i, ch in enumerate(chars):
+                ms[0] += delay_each
+                win.after(ms[0], lambda c=ch: w_inline(c, "dim"))
+            ms[0] += 80
+            result = "  HIT " if found else "  NOT FOUND"
+            rtag   = "err" if found else "ok"
+            win.after(ms[0], lambda r=result, tg=rtag: w(r, tg))
 
-        # ── Phase 3: salted attack ────────────────────────────────────────
-        later(180, "  ┌─ PHASE 3 · SAME ATTACK — SALTED DATABASE ─────────────────────┐", "head")
-        later(20,  f"  │  unique salt   :  {salt[:32]}…", "dim")
-        later(20,  f"  │  stored hash   :  sha256( salt ‖ \"{pw}\" )", "dim")
-        later(20,  f"  │               =  {h_s}", "hash")
-        later(20,  "  │", "dim")
-        later(20,  "  │  querying same table with this hash…", "dim")
-        later(400, f"  │  table[ {h_s[:24]}… ]", "dim")
-        later(20,  f"  │         ↓", "ok")
-        later(160, f"  │       KeyError — NOT IN TABLE", "ok")
-        later(20,  "  │", "dim")
-        later(20,  f"  │  ✔  S E C U R E  —  the table is useless", "safe")
-        later(20,  f"  │  attacker must compute sha256(salt‖w) for every w — O(N·|D|)", "ok")
-        later(20,  f"  │  and this salt is unique per user, so the work can't be shared", "ok")
-        later(20,  "  └────────────────────────────────────────────────────────────────┘", "head")
-        later(20,  "", "")
+        # ── Phase definitions ─────────────────────────────────────────────
+        TOTAL_PHASES = 6
 
-        # ── Phase 4: stretched attack ─────────────────────────────────────
-        later(180, "  ┌─ PHASE 4 · SAME ATTACK — KEY-STRETCHED DATABASE ──────────────┐", "head")
-        later(20,  f"  │  salt           :  {salt_st[:32]}…", "dim")
-        later(20,  f"  │  iterations K   :  {iters:,}  (sha256 applied {iters:,}× per guess)", "info")
-        later(20,  f"  │  stored hash    :  stretch( salt ‖ \"{pw}\", K={iters:,} )", "dim")
-        later(20,  f"  │               =  {h_st}", "hash")
-        later(20,  "  │", "dim")
-        later(20,  "  │  querying same table with this hash…", "dim")
-        later(400, f"  │  table[ {h_st[:24]}… ]", "dim")
-        later(20,  f"  │         ↓", "ok")
-        later(160, f"  │       KeyError — NOT IN TABLE", "ok")
-        later(20,  "  │", "dim")
-        later(20,  f"  │  ✔  S E C U R E  —  table still useless", "safe")
-        later(20,  f"  │  brute-force cost now ×{iters:,} per guess  →  O(N·|D|·K)", "ok")
-        later(20,  f"  │  even cracking one account takes {iters:,}× more compute", "ok")
-        later(20,  "  └────────────────────────────────────────────────────────────────┘", "head")
-        later(20,  "", "")
+        def phase1():
+            ms[0] = 0
+            w("", "")
+            later(0,   "  ┌─ PHASE 1 · BUILD THE RAINBOW TABLE ───────────────────────────────┐", "head")
+            later(20,  f"  │  dictionary     : {len(base_dict):,} passwords  (target included)", "info")
+            later(20,  f"  │  algorithm      : SHA-256  (one hash per word)", "dim")
+            later(20,  f"  │  building…", "dim")
+            later(320, f"  │  done in        : {build_t*1000:.2f} ms", "info")
+            later(20,  f"  │  table size     : {len(rt):,} entries  {{ hash → plaintext }}", "info")
+            later(20,  f"  │  lookup cost    : O(1) — instant dictionary access", "dim")
+            later(20,  "  │", "dim")
+            later(20,  "  │  sample entries in table:", "dim")
+            for word, h in sample_pairs:
+                later(70, f"  │    {h}  →  \"{word}\"", "tbl")
+            later(80,  f"  │    … {len(rt)-5:,} more entries", "tbl")
+            later(20,  "  └────────────────────────────────────────────────────────────────────┘", "head")
 
-        # ── Phase 5: peppered attack ──────────────────────────────────────
-        later(180, "  ┌─ PHASE 5 · SAME ATTACK — SALT + PEPPER DATABASE ──────────────┐", "head")
-        later(20,  f"  │  server pepper  :  (secret — never stored in DB)", "info")
-        later(20,  f"  │  salt           :  {salt_p[:32]}…", "dim")
-        later(20,  f"  │  stored hash    :  sha256( pepper ‖ salt ‖ \"{pw}\" )", "dim")
-        later(20,  f"  │               =  {h_p}", "hash")
-        later(20,  "  │", "dim")
-        later(20,  "  │  querying same table with this hash…", "dim")
-        later(400, f"  │  table[ {h_p[:24]}… ]", "dim")
-        later(20,  f"  │         ↓", "ok")
-        later(160, f"  │       KeyError — NOT IN TABLE", "ok")
-        later(20,  "  │", "dim")
-        later(20,  f"  │  ✔  S E C U R E  —  even if the DB is stolen", "safe")
-        later(20,  f"  │  pepper is server-side only (env var / HSM)", "ok")
-        later(20,  f"  │  attacker must brute-force 2²⁵⁶ pepper space — computationally", "ok")
-        later(20,  f"  │  infeasible: ≈ 1.2 × 10⁷⁷ keys to try before a single crack", "ok")
-        later(20,  "  └────────────────────────────────────────────────────────────────┘", "head")
-        later(20,  "", "")
+        def phase2():
+            ms[0] = 0
+            w("", "")
+            later(0,   "  ┌─ PHASE 2 · ATTACK — UNSALTED DATABASE ────────────────────────────┐", "head")
+            later(20,  f"  │  attacker sees  :  sha256(\"{pw}\")", "dim")
+            later(20,  f"  │  stored hash    :  {h_u}", "hash")
+            later(20,  "  │", "dim")
+            later(20,  "  │  querying rainbow table…", "dim")
+            scan_anim(h_u, found=True)
+            later(20,  "  │", "dim")
+            later(20,  "  │  match found!  table[ hash ]  →", "err")
+            type_anim("  │       ", f"  ██  C R A C K E D  ██  →  \"{pw}\"", "crack", delay_each=40)
+            later(20,  "  │", "dim")
+            later(20,  f"  │  time to crack : < 1 ms  (single O(1) lookup)", "err")
+            later(20,  f"  │  marginal cost : $0  — table reused on every account in the DB", "err")
+            later(20,  "  └────────────────────────────────────────────────────────────────────┘", "head")
 
-        # ── Verdict ───────────────────────────────────────────────────────
-        later(180, "  V E R D I C T", "head")
-        later(20,  f"  unsalted   →  cracked in < 1 ms  (O(1) table lookup)             ⚠", "err")
-        later(20,  f"  salted     →  table attack fails  (O(N·|D|) per user)             ✔", "ok")
-        later(20,  f"  stretched  →  table fails + ×{iters:,} cost per guess                ✔", "ok")
-        later(20,  f"  peppered   →  table fails + 2²⁵⁶ pepper space (≈ impossible)      ✔", "ok")
-        later(20,  "", "")
-        later(20,  f"  the table cost {build_t*1000:.1f} ms to build — but it cracks every unsalted", "dim")
-        later(20,  f"  account instantly, forever, at zero marginal cost per account.", "dim")
+        # ── Time/attack helpers ──────────────────────────────────────────────
+        import math as _math
+
+        GPU_RATE  = 10_000_000_000    # 10^10 H/s — high-end GPU (RTX 4090 class)
+        CLST_RATE = 1_000_000_000_000 # 10^12 H/s — nation-state GPU cluster
+        RW_DICT   = 10_000_000        # real-world dict: rockyou-scale 10M passwords
+        RW_USERS  = 100_000           # 100K user database
+
+        def fmt_time(sec):
+            if sec <= 0:      return "0 s"
+            if sec < 1e-6:    return "< 1 us"
+            if sec < 1e-3:    return f"{sec*1e6:.1f} us"
+            if sec < 1:       return f"{sec*1e3:.2f} ms"
+            if sec < 60:      return f"{sec:.2f} s"
+            if sec < 3600:    return f"{sec/60:.1f} min"
+            if sec < 86400:   return f"{sec/3600:.1f} hrs"
+            if sec < 3.15e7:  return f"{sec/86400:.1f} days"
+            yrs = sec / (365.25 * 86400)
+            if yrs < 1e15:    return f"{yrs:.2e} years"
+            return "~10^" + str(int(_math.log10(yrs))) + " years"
+
+        def phase3():
+            ms[0] = 0
+            d            = len(base_dict)
+            t_demo_gpu   = d / GPU_RATE
+            t_rw_gpu     = RW_USERS * RW_DICT / GPU_RATE
+            t_rw_clst    = RW_USERS * RW_DICT / CLST_RATE
+
+            w("", "")
+            later(0,   "  +- PHASE 3 . SALTED DATABASE -----------------------------------------------+", "head")
+            later(20,  "  |  server generates a unique random 128-bit salt per user:", "dim")
+            later(20,  f"  |", "dim")
+            later(20,  f"  |    SALT  ->  {salt}", "salt")
+            later(20,  f"  |", "dim")
+            later(20,  f"  |  hash input  =  salt || password", "dim")
+            later(20,  f'  |             =  "{salt[:16]}..."  +  "{pw}"', "dim")
+            later(20,  f'  |             =  "{(salt+pw)[:44]}..."', "dim")
+            later(20,  f"  |  sha256( ^ ) =  {h_s}", "hash")
+            later(20,  "  |", "dim")
+            later(20,  "  |  attacker queries rainbow table with this hash...", "dim")
+            scan_anim(h_s, found=False)
+            later(20,  "  |", "dim")
+            later(20,  "  |  KeyError -- not in table   rainbow table defeated", "ok")
+            later(20,  "  |", "dim")
+            later(20,  "  |  --- BUT WAIT -- attacker adapts ------------------------------------", "err")
+            later(20,  "  |  salt IS stored in the DB (needed for login verification)", "err")
+            later(20,  "  |  attacker reads it and brute-forces:  sha256( salt || w )", "err")
+            later(20,  "  |", "dim")
+            later(20,  f"  |  GPU rate           :  {GPU_RATE:,.0f} H/s  (RTX 4090 class)", "info")
+            later(20,  f"  |  cluster rate       :  {CLST_RATE:,.0f} H/s  (nation-state)", "info")
+            later(20,  "  |", "dim")
+            later(20,  f"  |  [THIS DEMO]  dict = {d} words,  1 user:", "dim")
+            later(20,  f"  |    guesses needed   :  {d}", "dim")
+            later(20,  f"  |    time on GPU      :  {fmt_time(t_demo_gpu)}   <- tiny demo dict, trivial!", "err")
+            later(20,  "  |", "dim")
+            later(20,  f"  |  [REAL WORLD]  10M-word dict,  {RW_USERS:,} users:", "dim")
+            later(20,  f"  |    guesses needed   :  {RW_USERS:,} x 10,000,000  =  {RW_USERS*RW_DICT:.2e}", "dim")
+            later(20,  f"  |    time on GPU      :  {fmt_time(t_rw_gpu)}", "err" if t_rw_gpu < 3600 else "ok")
+            later(20,  f"  |    time on cluster  :  {fmt_time(t_rw_clst)}", "err" if t_rw_clst < 3600 else "ok")
+            later(20,  "  |", "dim")
+            later(20,  "  |  salted kills rainbow tables -- but a powerful attacker can", "err")
+            later(20,  "  |  still brute-force per-user. we need to slow every guess down.", "err")
+            later(20,  "  |  > NEXT: key stretching multiplies brute-force cost by K", "info")
+            later(20,  "  +------------------------------------------------------------------------+", "head")
+
+        def phase4():
+            ms[0] = 0
+            d             = len(base_dict)
+            eff_gpu       = GPU_RATE  / iters
+            eff_clst      = CLST_RATE / iters
+            t_demo_gpu    = d / eff_gpu
+            t_rw_gpu      = RW_USERS * RW_DICT / eff_gpu
+            t_rw_clst     = RW_USERS * RW_DICT / eff_clst
+            t_rw_salted   = RW_USERS * RW_DICT / GPU_RATE
+
+            w("", "")
+            later(0,   "  +- PHASE 4 . KEY-STRETCHED DATABASE ------------------------------------+", "head")
+            later(20,  "  |  same salt, but SHA-256 is chained K times:", "dim")
+            later(20,  f"  |", "dim")
+            later(20,  f"  |    SALT  ->  {salt_st}", "salt")
+            later(20,  f"  |    K     ->  {iters:,}  iterations", "info")
+            later(20,  f"  |", "dim")
+            later(20,  f"  |  stretch chain:", "dim")
+            later(20,  f'  |    h0 = sha256( salt || "{pw}" )', "dim")
+            later(20,  f"  |    h1 = sha256( h0 )", "dim")
+            later(20,  f"  |    h2 = sha256( h1 )", "dim")
+            later(20,  f"  |    :     :", "dim")
+            later(20,  f"  |    h{iters-1} = sha256( h{iters-2} )  <- stored in DB", "dim")
+            later(20,  f"  |", "dim")
+            later(20,  f"  |  final hash  =  {h_st}", "hash")
+            later(20,  "  |", "dim")
+            later(20,  "  |  attacker queries rainbow table...", "dim")
+            scan_anim(h_st, found=False)
+            later(20,  "  |", "dim")
+            later(20,  "  |  KeyError -- not in table   (salt + stretching)", "ok")
+            later(20,  "  |", "dim")
+            later(20,  "  |  --- same GPU farm, same brute-force, same salt visible -----", "err")
+            later(20,  f"  |  each guess now costs {iters:,} hashes instead of 1", "err")
+            later(20,  f"  |", "dim")
+            later(20,  f"  |  effective GPU rate  :  {GPU_RATE:.0e} / {iters:,}  =  {eff_gpu:.2e} guesses/s", "info")
+            later(20,  f"  |  effective cluster   :  {CLST_RATE:.0e} / {iters:,}  =  {eff_clst:.2e} guesses/s", "info")
+            later(20,  "  |", "dim")
+            later(20,  f"  |  [THIS DEMO]  dict = {d} words,  1 user:", "dim")
+            later(20,  f"  |    time on GPU      :  {fmt_time(t_demo_gpu)}", "ok" if t_demo_gpu > 0.001 else "err")
+            later(20,  "  |", "dim")
+            later(20,  f"  |  [REAL WORLD]  10M-word dict,  {RW_USERS:,} users:", "dim")
+            later(20,  f"  |    salted  (no stretch) :  {fmt_time(t_rw_salted):<20}  <- baseline", "err")
+            later(20,  f"  |    stretched K={iters:,}  GPU :  {fmt_time(t_rw_gpu):<20}  <- x{iters:,}", "ok")
+            later(20,  f"  |    stretched K={iters:,}  clst:  {fmt_time(t_rw_clst):<20}", "ok")
+            later(20,  "  |", "dim")
+            later(20,  f"  |  same hardware -- K={iters:,} makes every guess {iters:,}x more expensive.", "ok")
+            later(20,  "  |  attacker with unlimited GPUs can still eventually crack salted+stretched.", "info")
+            later(20,  "  |  > NEXT: pepper adds a server-side secret the attacker can NEVER see", "info")
+            later(20,  "  +------------------------------------------------------------------------+", "head")
+
+        def phase5():
+            ms[0] = 0
+            pepper_bits  = len(pepper) * 4
+            log_guesses  = _math.log10(2**pepper_bits) + _math.log10(RW_DICT) + _math.log10(RW_USERS)
+            log_t_sec    = log_guesses - _math.log10(GPU_RATE)
+            log_t_yrs    = log_t_sec   - _math.log10(365.25 * 86400)
+            univ_log     = _math.log10(1.38e10)
+
+            w("", "")
+            later(0,   "  +- PHASE 5 . PEPPERED DATABASE -----------------------------------------+", "head")
+            later(20,  "  |  pepper = secret value, NEVER written to DB:", "dim")
+            later(20,  "  |  lives in server memory / env var / HSM only", "dim")
+            later(20,  f"  |", "dim")
+            later(20,  f"  |    PEPPER  ->  {pepper}", "pepper")
+            later(20,  f"  |    SALT    ->  {salt_p}", "salt")
+            later(20,  f"  |", "dim")
+            later(20,  f"  |  hash input  =  pepper || salt || password", "dim")
+            later(20,  f'  |             =  pepper + "{salt_p[:12]}..." + "{pw}"', "dim")
+            later(20,  f"  |  sha256( ^ ) =  {h_p}", "hash")
+            later(20,  "  |", "dim")
+            later(20,  "  |  --- attacker steals the entire DB ---------------------------------", "err")
+            later(20,  "  |    salt   -> visible in DB                     attacker has it", "err")
+            later(20,  "  |    hash   -> visible in DB                     attacker has it", "err")
+            later(20,  "  |    pepper -> NOT in DB  (server only)          attacker BLIND", "ok")
+            later(20,  "  |", "dim")
+            later(20,  "  |  attacker queries rainbow table...", "dim")
+            scan_anim(h_p, found=False)
+            later(20,  "  |", "dim")
+            later(20,  "  |  KeyError -- not in table   (pepper unseen)", "ok")
+            later(20,  "  |", "dim")
+            later(20,  "  |  --- attacker tries to brute-force every pepper value -----------", "err")
+            later(20,  "  |  must try:  sha256( pepper_guess || salt || w )  per combination", "err")
+            later(20,  f"  |", "dim")
+            later(20,  f"  |  pepper size   :  {pepper_bits} bits  ->  2^{pepper_bits}  ~  {2**pepper_bits:.2e} values", "info")
+            later(20,  f"  |  total combos  :  2^{pepper_bits} x {RW_DICT:.0e} x {RW_USERS:.0e}  ~  10^{log_guesses:.0f}", "info")
+            later(20,  f"  |  GPU rate      :  {GPU_RATE:.0e} H/s", "info")
+            later(20,  "  |", "dim")
+            later(20,  f"  |  time to exhaust pepper space:", "dim")
+            later(20,  f"  |    = 10^{log_t_sec:.0f} seconds", "ok")
+            later(20,  f"  |    = ~10^{log_t_yrs:.0f} years", "ok")
+            later(20,  f"  |  age of universe  =  ~10^{univ_log:.0f} years  (13.8 billion)", "dim")
+            later(20,  f"  |  that is  10^{log_t_yrs - univ_log:.0f} x  the age of the universe", "ok")
+            later(20,  "  |", "dim")
+            later(20,  "  |  >>> M A T H E M A T I C A L L Y   I N F E A S I B L E <<<", "safe")
+            later(20,  "  +------------------------------------------------------------------------+", "head")
+
+        def phase6():
+            ms[0] = 0
+            t_salt  = fmt_time(RW_USERS * RW_DICT / GPU_RATE)
+            t_str   = fmt_time(RW_USERS * RW_DICT * iters / GPU_RATE)
+            pepper_bits = len(pepper) * 4
+            log_pep_yrs = (_math.log10(2**pepper_bits) + _math.log10(RW_DICT) +
+                           _math.log10(RW_USERS) - _math.log10(GPU_RATE) -
+                           _math.log10(365.25 * 86400))
+
+            w("", "")
+            later(0,  "  ======================================================================", "sep")
+            later(20, "  V E R D I C T  --  Real-world attack times", "head")
+            later(20, f"  assumptions: 10M-word dict, {RW_USERS:,} users, {GPU_RATE:.0e} H/s GPU", "dim")
+            later(20, "  ======================================================================", "sep")
+            later(20, "", "")
+            later(20, f"  {'METHOD':<12}  {'RAINBOW TABLE':<16}  {'BRUTE-FORCE TIME':<24}  STATUS", "info")
+            later(20, f"  {'------':<12}  {'-------------':<16}  {'----------------':<24}  ------", "sep")
+            later(100, f"  {'Unsalted':<12}  {'WORKS  !!':<16}  {'< 1 ms  (O(1))':<24}  CRACKED", "err")
+            later(100, f"  {'Salted':<12}  {'fails  v':<16}  {t_salt:<24}  secure*", "ok")
+            later(100, f"  {'Stretched':<12}  {'fails  v':<16}  {t_str:<24}  secure x{iters:,}", "ok")
+            later(100, f"  {'Peppered':<12}  {'fails  v':<16}  {'~10^'+str(int(log_pep_yrs))+' years':<24}  infeasible", "ok")
+            later(20, "", "")
+            later(20, "  * salted stops rainbow tables -- brute-force still feasible", "dim")
+            later(20, "    with enough compute. stretch + pepper close that gap.", "dim")
+            later(20, "", "")
+            later(20, f"  the rainbow table cost {build_t*1000:.2f} ms to build and cracked every", "dim")
+            later(20, "  unsalted account at zero marginal cost. each layer added --", "dim")
+            later(20, "  salt, stretch, pepper -- multiplies the attacker's work.", "dim")
+
+
+        phases     = [phase1, phase2, phase3, phase4, phase5, phase6]
+        phase_idx  = [0]
+
+        def advance(_=None):
+            i = phase_idx[0]
+            if i >= TOTAL_PHASES:
+                return
+            phases[i]()
+            phase_lbl.configure(text=f"  PHASE {i+1} / {TOTAL_PHASES}  ")
+            phase_idx[0] += 1
+            if phase_idx[0] >= TOTAL_PHASES:
+                win.after(ms[0] + 200, lambda: (
+                    next_btn.configure(state="disabled", text="DONE", fg_color=DIM),
+                    hint_lbl.configure(text=""),
+                ))
+            else:
+                # Show prompt after last line of this phase settles
+                win.after(ms[0] + 300, lambda: w(
+                    f"\n  ► Press ENTER or [ NEXT PHASE → ]  "
+                    f"({phase_idx[0]+1}/{TOTAL_PHASES}: "
+                    f"{['','Build Table','Unsalted Attack','Salted','Stretched','Peppered','Verdict'][phase_idx[0]+1] if phase_idx[0] < TOTAL_PHASES-1 else 'Verdict'})"
+                    , "prompt"
+                ))
+
+        win.bind("<Return>", advance)
+        advance()  # kick off phase 1 immediately
 
     # ══════════════════════════════════════════════════════════════════════════
     # FEATURE 2 — BREACH SIMULATOR
